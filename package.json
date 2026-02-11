@@ -40,13 +40,18 @@
     "lint": "biome lint src examples",
     "format": "biome format src examples",
     "check": "biome check --write src examples",
-    "build": "tsup"
+    "build": "tsup",
+    "prepublishOnly": "npm run build"
   },
   "files": [
-    "src",
+    "dist",
     "README.md",
+    "LICENSE.md",
     "package.json"
   ],
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
     "drizzle-orm": "^0.45.1",
     "pg": "^8.18.0",

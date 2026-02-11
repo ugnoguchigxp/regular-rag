@@ -50,6 +50,15 @@ cp .env.example .env
 
 `.env` の `DATABASE_URL` と Azure OpenAI 系の値を設定してください。
 
+## npm パッケージとして利用する
+
+- Node.js: `>= 18`
+- インストール:
+
+```sh
+npm install regular-rag
+```
+
 ## クイックスタート
 
 ### 基本的な使い方
@@ -275,4 +284,3 @@ regular-rag/
 ├── drizzle.config.ts
 └── package.json
 ```
-
