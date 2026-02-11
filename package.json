@@ -1,0 +1,61 @@
+{
+  "name": "regular-rag",
+  "version": "0.0.1",
+  "description": "Regular-RAG is a framework-agnostic RAG (Retrieval-Augmented Generation) engine with built-in support for Knowledge Graphs and PostgreSQL/pgvector.",
+  "type": "module",
+  "author": "y.noguchi",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/y-noguchi/regular-rag.git"
+  },
+  "bugs": {
+    "url": "https://github.com/y-noguchi/regular-rag/issues"
+  },
+  "homepage": "https://github.com/y-noguchi/regular-rag#readme",
+  "keywords": [
+    "rag",
+    "llm",
+    "knowledge-graph",
+    "postgresql",
+    "pgvector",
+    "typescript"
+  ],
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "dev": "bun run --hot examples/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome lint src examples",
+    "format": "biome format src examples",
+    "check": "biome check --write src examples",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "package.json"
+  ],
+  "dependencies": {
+    "drizzle-orm": "^0.45.1",
+    "pg": "^8.18.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.3.14",
+    "@types/bun": "latest",
+    "@types/node": "^25.2.3",
+    "@types/pg": "^8.16.0",
+    "@vitest/coverage-v8": "^4.0.18",
+    "drizzle-kit": "^0.31.9",
+    "hono": "^4.11.9",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}

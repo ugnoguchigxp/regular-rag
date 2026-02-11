@@ -1,0 +1,12 @@
+{
+	"name": "regular-rag-example",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "bun run --hot index.ts"
+	},
+	"dependencies": {
+		"hono": "^4.11.9",
+		"regular-rag": "link:.."
+	}
+}
