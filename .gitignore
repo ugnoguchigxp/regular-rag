@@ -32,3 +32,6 @@ Thumbs.db
 /drizzle
 .db-data/
 
+# coverage
+/coverage
+
