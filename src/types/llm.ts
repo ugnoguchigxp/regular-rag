@@ -40,6 +40,7 @@ export const AzureChatResponseSchema = z.object({
 export const SearchPlanSchema = z.object({
 	should_search: z.boolean(),
 	search_query: z.string(),
+	force_web_search: z.boolean().optional(),
 	top_k: z.number().int().min(1).max(8).optional(),
 	reason: z.string().optional(),
 	knowledge_source: z.string().optional(),
@@ -83,6 +84,7 @@ export function normalizeSearchPlan(
 
 	return {
 		...plan,
+		force_web_search: plan.force_web_search ?? false,
 		top_k: topK,
 	};
 }

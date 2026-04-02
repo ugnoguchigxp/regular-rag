@@ -9,6 +9,7 @@ describe("normalizeSearchPlan", () => {
 			search_query: "dialysis",
 		});
 		expect(normalized.top_k).toBe(5);
+		expect(normalized.force_web_search).toBe(false);
 	});
 
 	it("clamps and floors top_k into allowed range", () => {

@@ -4,12 +4,13 @@ import type { Client, Pool } from "pg";
 import type { DbConnection } from "../db";
 import { connectDb, createDbConnection, wrapExternalClient } from "../db";
 import { EMBEDDING_DIMENSIONS } from "../db/schema";
-import type { EmbeddingProvider, LlmProvider } from "../providers/types";
+import type { EmbeddingProvider, LlmProvider, WebSearchProvider } from "../providers/types";
 import { CacheRepository } from "../repositories/CacheRepository";
 import { KnowledgeGraphRepository } from "../repositories/KnowledgeGraphRepository";
 import { RagRepository } from "../repositories/RagRepository";
 import { ChatbotService } from "../services/ChatbotService";
 import { KnowledgeGraphService } from "../services/KnowledgeGraphService";
+import { WebSearchService } from "../services/WebSearchService";
 import type { ChatMessage } from "../types/llm";
 
 /**
@@ -19,6 +20,7 @@ export interface RagEngineConfigWithUrl {
 	databaseUrl: string;
 	llmProvider: LlmProvider;
 	embeddingProvider: EmbeddingProvider;
+	webSearchProvider?: WebSearchProvider;
 }
 
 /**
@@ -28,6 +30,7 @@ export interface RagEngineConfigWithClient {
 	pgClient: Client | Pool;
 	llmProvider: LlmProvider;
 	embeddingProvider: EmbeddingProvider;
+	webSearchProvider?: WebSearchProvider;
 }
 
 export type RagEngineConfig =
@@ -49,6 +52,14 @@ export interface RagResponse {
 			combinedScore: number;
 		}>;
 		plan: unknown;
+	};
+	web?: {
+		results: Array<{
+			title: string;
+			url: string;
+			snippet: string;
+			content?: string;
+		}>;
 	};
 }
 
@@ -76,6 +87,7 @@ export class RagEngine {
 	private chatbotService: ChatbotService;
 	private knowledgeGraphService: KnowledgeGraphService;
 	private embeddingProvider: EmbeddingProvider;
+	private webSearchService?: WebSearchService;
 
 	private constructor(
 		connection: DbConnection,
@@ -83,12 +95,14 @@ export class RagEngine {
 		chatbotService: ChatbotService,
 		knowledgeGraphService: KnowledgeGraphService,
 		embeddingProvider: EmbeddingProvider,
+		webSearchService?: WebSearchService,
 	) {
 		this.connection = connection;
 		this.ragRepository = ragRepository;
 		this.chatbotService = chatbotService;
 		this.knowledgeGraphService = knowledgeGraphService;
 		this.embeddingProvider = embeddingProvider;
+		this.webSearchService = webSearchService;
 	}
 
 	/**
@@ -125,12 +139,17 @@ export class RagEngine {
 				expectedEmbeddingDimensions,
 			);
 
+			const webSearchService = config.webSearchProvider
+				? new WebSearchService(config.webSearchProvider)
+				: undefined;
+
 			const chatbotService = new ChatbotService(
 				ragRepository,
 				cacheRepository,
 				knowledgeGraphService,
 				config.llmProvider,
 				config.embeddingProvider,
+				webSearchService,
 			);
 
 			return new RagEngine(
@@ -139,6 +158,7 @@ export class RagEngine {
 				chatbotService,
 				knowledgeGraphService,
 				config.embeddingProvider,
+				webSearchService,
 			);
 		} catch (error) {
 			if (
@@ -162,7 +182,7 @@ export class RagEngine {
 		if (probeEmbedding.length !== expectedDimensions) {
 			throw new Error(
 				`Embedding dimension mismatch. database expects ${expectedDimensions}, provider returned ${probeEmbedding.length}. ` +
-					"Align your Azure embedding deployment with database vector dimensions.",
+				"Align your Azure embedding deployment with database vector dimensions.",
 			);
 		}
 	}
@@ -228,5 +248,34 @@ export class RagEngine {
 				await client.end();
 			}
 		}
+	}
+
+	/**
+	 * Web 検索を実行する
+	 */
+	async searchWeb(query: string, maxResults = 5): Promise<Array<{ title: string; url: string; snippet: string; content?: string }>> {
+		if (!this.webSearchService) {
+			throw new Error("WebSearchProvider is not configured in this RagEngine.");
+		}
+
+		const searchResults = await this.webSearchService.search({ query, maxResults });
+
+		// 上位3件の内容をフェッチする（簡易版）
+		const results = await Promise.all(searchResults.map(async (res: any, idx: number) => {
+			if (idx < 3) {
+				try {
+					const pageContent = await this.webSearchService!.fetchPageContent(res.url);
+					return {
+						...res,
+						content: pageContent.cleanText
+					};
+				} catch (error) {
+					return { ...res };
+				}
+			}
+			return { ...res };
+		}));
+
+		return results;
 	}
 }

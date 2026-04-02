@@ -7,6 +7,7 @@ export * from "./core/RagEngine";
 export * from "./db";
 export * from "./db/schema";
 export * from "./providers/AzureOpenAiProvider";
+export * from "./providers/BraveSearchProvider";
 // Providers
 export * from "./providers/types";
 // Repositories
@@ -17,5 +18,6 @@ export * from "./repositories/RagRepository";
 export * from "./services/ChatbotService";
 export * from "./services/GraphExtractor";
 export * from "./services/KnowledgeGraphService";
+export * from "./services/WebSearchService";
 // Types
 export * from "./types/llm";

@@ -32,3 +32,29 @@ export interface LlmResponse {
 export interface EmbeddingProvider {
 	createEmbedding(input: string): Promise<number[]>;
 }
+
+/**
+ * Web 検索結果インターフェース
+ */
+export interface WebSearchResult {
+	title: string;
+	url: string;
+	snippet: string;
+	position: number;
+}
+
+/**
+ * Web 検索オプションインターフェース
+ */
+export interface WebSearchOptions {
+	query: string;
+	maxResults?: number;
+	lang?: string;
+}
+
+/**
+ * Web 検索プロバイダーインターフェース
+ */
+export interface WebSearchProvider {
+	search(options: WebSearchOptions): Promise<WebSearchResult[]>;
+}
