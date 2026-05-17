@@ -2,6 +2,11 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { z } from "zod";
 import {
+	categoryFromPageRelativePath,
+	DEFAULT_WIKI_CATEGORY,
+	topLevelCategoriesFromFolderPaths,
+} from "../modules/sources/wiki/category";
+import {
 	commitDeleteChange,
 	commitFileChange,
 	commitPathsChange,
@@ -30,7 +35,7 @@ import type { SourceRepository } from "../modules/sources/source.repository";
 const pageSlugSchema = z
 	.string()
 	.transform((value) => sanitizeSlug(value))
-	.refine((value) => isSafeSlug(value), {
+	.refine((value) => value !== "" && isSafeSlug(value), {
 		message: "Invalid page slug",
 	});
 
@@ -71,6 +76,14 @@ const slugFromRequestPath = (url: string, prefix: string): string => {
 	return sanitizeSlug(extractRemainderFromPathname(pathname, prefix));
 };
 
+const rawPageSlugFromRequestPath = (url: string): string => {
+	const slugWithSuffix = slugFromRequestPath(url, "/api/sources/pages/");
+	if (!slugWithSuffix.endsWith("/raw")) {
+		return "\0";
+	}
+	return sanitizeSlug(slugWithSuffix.slice(0, -"/raw".length));
+};
+
 const invalidSlugResponse = (slug: string) => ({
 	message: "Invalid page slug",
 	slug,
@@ -97,6 +110,12 @@ const folderErrorStatus = (error: unknown): 400 | 404 | 409 => {
 type SourcesRouteDeps = {
 	contentRoot: string;
 	sourceRepository: SourceRepository;
+};
+
+type SourceReindexSummary = {
+	importedFiles: number;
+	skippedFiles: number;
+	removedSources: number;
 };
 
 const makeExcerpt = (body: string, query: string): string => {
@@ -131,6 +150,19 @@ export function createSourcesRoute(deps: SourcesRouteDeps) {
 		await ensureGitRepo(deps.contentRoot);
 	};
 
+	const syncSourceIndex = async (): Promise<SourceReindexSummary> => {
+		const result = await importMarkdownDirectory({
+			contentRoot: deps.contentRoot,
+			sourceRepository: deps.sourceRepository,
+			embedFragments: false,
+		});
+		return {
+			importedFiles: result.importedFiles,
+			skippedFiles: result.skippedFiles,
+			removedSources: result.removedSources,
+		};
+	};
+
 	return new Hono()
 		.get("/health", async (c) => {
 			await ensureSourceRuntime();
@@ -147,6 +179,23 @@ export function createSourcesRoute(deps: SourcesRouteDeps) {
 				listFolders(deps.contentRoot),
 			]);
 			return c.json({ items, folders });
+		})
+		.get("/categories", async (c) => {
+			await ensureSourceRuntime();
+			const [folders, indexedCategories] = await Promise.all([
+				listFolders(deps.contentRoot),
+				deps.sourceRepository.listCategories(["wiki"]),
+			]);
+			const categories = new Set<string>([
+				DEFAULT_WIKI_CATEGORY,
+				...indexedCategories,
+				...topLevelCategoriesFromFolderPaths(
+					folders.map((folder) => folder.path),
+				),
+			]);
+			return c.json({
+				items: [...categories].sort((a, b) => a.localeCompare(b)),
+			});
 		})
 		.get("/search", zValidator("query", searchQuerySchema), async (c) => {
 			await ensureSourceRuntime();
@@ -235,11 +284,13 @@ export function createSourcesRoute(deps: SourcesRouteDeps) {
 					[renamed.oldAbsolutePath, renamed.newAbsolutePath],
 					`docs(folder): rename ${renamed.from} to ${renamed.path}`,
 				);
+				const reindexed = await syncSourceIndex();
 				return c.json({
 					ok: true,
 					from: renamed.from,
 					path: renamed.path,
 					movedPages: renamed.movedPages,
+					reindexed,
 					commit,
 				});
 			} catch (error) {
@@ -269,10 +320,12 @@ export function createSourcesRoute(deps: SourcesRouteDeps) {
 					[deleted.absolutePath],
 					`docs(folder): delete ${deleted.path}`,
 				);
+				const reindexed = await syncSourceIndex();
 				return c.json({
 					ok: true,
 					path: deleted.path,
 					deletedSlugs: deleted.deletedSlugs,
+					reindexed,
 					commit,
 				});
 			} catch (error) {
@@ -285,6 +338,20 @@ export function createSourcesRoute(deps: SourcesRouteDeps) {
 					folderErrorStatus(error),
 				);
 			}
+		})
+		.get("/pages/*/raw", async (c) => {
+			await ensureSourceRuntime();
+			const slug = rawPageSlugFromRequestPath(c.req.url);
+			if (isInvalidSlug(slug)) {
+				return c.json(invalidSlugResponse(slug), 400);
+			}
+			const page = await readPage(deps.contentRoot, slug);
+			if (!page) {
+				return c.json({ message: "Page not found", slug }, 404);
+			}
+			return c.body(page.body, 200, {
+				"Content-Type": "text/markdown; charset=utf-8",
+			});
 		})
 		.get("/pages/*", async (c) => {
 			await ensureSourceRuntime();
@@ -324,13 +391,30 @@ export function createSourcesRoute(deps: SourcesRouteDeps) {
 			if (!savedPage) {
 				return c.json({ message: "Page save verification failed" }, 500);
 			}
+			const category = categoryFromPageRelativePath(savedPage.path);
+			if (!category) {
+				return c.json(
+					{
+						message:
+							"Top-level documents are not allowed. Use pages/<category>/...",
+						slug: savedPage.slug,
+					},
+					400,
+				);
+			}
+			const sourceMetadata = {
+				...savedPage.meta,
+				relativePath: `pages/${savedPage.path}`,
+				wikiSlug: savedPage.slug,
+			};
 			await deps.sourceRepository.upsertSourceDocument({
 				sourceKind: "wiki",
+				category,
 				uri: `${deps.contentRoot}/pages/${savedPage.path}`,
 				title: savedPage.title,
 				body: content,
 				contentHash: hash,
-				metadata: savedPage.meta,
+				metadata: sourceMetadata,
 			});
 			return c.json({ ok: true, slug: savedPage.slug, hash, commit });
 		})
@@ -391,13 +475,30 @@ export function createSourcesRoute(deps: SourcesRouteDeps) {
 					500,
 				);
 			}
+			const category = categoryFromPageRelativePath(savedPage.path);
+			if (!category) {
+				return c.json(
+					{
+						message:
+							"Top-level documents are not allowed. Use pages/<category>/...",
+						slug: savedPage.slug,
+					},
+					400,
+				);
+			}
+			const sourceMetadata = {
+				...savedPage.meta,
+				relativePath: `pages/${savedPage.path}`,
+				wikiSlug: savedPage.slug,
+			};
 			await deps.sourceRepository.upsertSourceDocument({
 				sourceKind: "wiki",
+				category,
 				uri: `${deps.contentRoot}/pages/${savedPage.path}`,
 				title: savedPage.title,
 				body: content,
 				contentHash: hash,
-				metadata: savedPage.meta,
+				metadata: sourceMetadata,
 			});
 			return c.json({ ok: true, slug: savedPage.slug, hash, commit });
 		})

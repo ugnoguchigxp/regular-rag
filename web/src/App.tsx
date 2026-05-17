@@ -3,7 +3,6 @@ import {
 	BookOpen,
 	Bot,
 	Database,
-	FlaskConical,
 	GitBranch,
 	RefreshCw,
 	Search,
@@ -16,11 +15,13 @@ import {
 	type ChatCompletionResult,
 	type ConversationItem,
 	type ConversationMessage,
+	type RetrievedFragment,
 	type RetrievalLog,
 	type SourceHealth,
 	fetchConversationMessages,
 	fetchConversations,
 	fetchRetrievalLogs,
+	fetchSourceCategories,
 	fetchSourceHealth,
 	searchFragments,
 	sendChat,
@@ -66,6 +67,43 @@ function renderArtifactContent(artifact: Artifact): string {
 	return JSON.stringify(artifact.content, null, 2);
 }
 
+const formatScore = (value: number | undefined): string =>
+	typeof value === "number" ? value.toFixed(4) : "-";
+
+const toResultTitle = (item: RetrievedFragment): string =>
+	item.heading && item.heading.trim().length > 0
+		? item.heading
+		: item.sourceUri;
+
+type RetrievalLogContextSummary = {
+	retrievalStrategy?: string;
+	selectedCount?: number;
+	vectorCount?: number;
+	textCount?: number;
+	mergedCount?: number;
+};
+
+const toRetrievalLogContextSummary = (
+	context: unknown,
+): RetrievalLogContextSummary => {
+	if (!context || typeof context !== "object" || Array.isArray(context)) {
+		return {};
+	}
+	const value = context as Record<string, unknown>;
+	const numberOrUndefined = (input: unknown): number | undefined =>
+		typeof input === "number" ? input : undefined;
+	return {
+		retrievalStrategy:
+			typeof value.retrievalStrategy === "string"
+				? value.retrievalStrategy
+				: undefined,
+		selectedCount: numberOrUndefined(value.selectedCount),
+		vectorCount: numberOrUndefined(value.vectorCount),
+		textCount: numberOrUndefined(value.textCount),
+		mergedCount: numberOrUndefined(value.mergedCount),
+	};
+};
+
 export function App() {
 	const [tab, setTab] = useState<TabId>("chat");
 	const [busy, setBusy] = useState(false);
@@ -83,18 +121,24 @@ export function App() {
 	const [latestChatResult, setLatestChatResult] =
 		useState<ChatCompletionResult | null>(null);
 	const [composerText, setComposerText] = useState("");
+	const [availableCategories, setAvailableCategories] = useState<string[]>([
+		"tech",
+	]);
+	const [chatCategory, setChatCategory] = useState("tech");
+	const [searchCategory, setSearchCategory] = useState("tech");
+	const [knowledgeSelection, setKnowledgeSelection] = useState<{
+		slug: string | null;
+		at: number;
+	}>({ slug: null, at: 0 });
 
 	const [searchQuery, setSearchQuery] = useState("");
-	const [searchResults, setSearchResults] = useState<
-		Array<{
-			id: string;
-			sourceUri: string;
-			locator: string;
-			heading: string | null;
-			content: string;
-			combinedScore: number;
-		}>
-	>([]);
+	const [searchResults, setSearchResults] = useState<{
+		strategy: "merged" | "text_fallback" | "legacy_retrieve";
+		selectedResults: RetrievedFragment[];
+		vectorResults: RetrievedFragment[];
+		textResults: RetrievedFragment[];
+		mergedResults: RetrievedFragment[];
+	} | null>(null);
 
 	const conversationArtifacts = useMemo(
 		() => chatMessages.flatMap((message) => message.artifacts ?? []),
@@ -115,6 +159,20 @@ export function App() {
 		setConversations(items);
 	};
 
+	const loadCategories = async () => {
+		const categories = await fetchSourceCategories();
+		const normalized = categories.length > 0 ? categories : ["tech"];
+		setAvailableCategories(normalized);
+		setChatCategory((prev) => {
+			if (prev === "all" || normalized.includes(prev)) return prev;
+			return normalized.includes("tech") ? "tech" : (normalized[0] ?? "tech");
+		});
+		setSearchCategory((prev) => {
+			if (prev === "all" || normalized.includes(prev)) return prev;
+			return normalized.includes("tech") ? "tech" : (normalized[0] ?? "tech");
+		});
+	};
+
 	const loadConversationDetails = async (conversationId: string) => {
 		const [messages, logs] = await Promise.all([
 			fetchConversationMessages(conversationId),
@@ -129,7 +187,11 @@ export function App() {
 		void (async () => {
 			try {
 				setErrorText(null);
-				await Promise.all([loadHealth(), loadConversations()]);
+				await Promise.all([
+					loadHealth(),
+					loadConversations(),
+					loadCategories(),
+				]);
 			} catch (error) {
 				setErrorText(
 					error instanceof Error ? error.message : "Failed to load app.",
@@ -161,6 +223,7 @@ export function App() {
 				conversationId: activeConversationId ?? undefined,
 				messages: toChatMessages(chatMessages, text),
 				topK: 8,
+				category: chatCategory === "all" ? undefined : chatCategory,
 			});
 			setLatestChatResult(result);
 			setComposerText("");
@@ -182,13 +245,103 @@ export function App() {
 	const handleSearchFragments = async () => {
 		const query = searchQuery.trim();
 		if (!query) {
-			setSearchResults([]);
+			setSearchResults(null);
 			return;
 		}
 		await withBusy(async () => {
-			const response = await searchFragments({ query, topK: 12 });
-			setSearchResults(response.results);
+			const response = await searchFragments({
+				query,
+				topK: 12,
+				category: searchCategory === "all" ? undefined : searchCategory,
+			});
+			setSearchResults({
+				strategy: response.strategy,
+				selectedResults: response.selectedResults,
+				vectorResults: response.vectorResults,
+				textResults: response.textResults,
+				mergedResults: response.mergedResults,
+			});
 		});
+	};
+
+	const openKnowledgeFromSearch = (slug: string | null | undefined) => {
+		if (!slug) return;
+		setKnowledgeSelection((previous) => ({
+			slug,
+			at: previous.at + 1,
+		}));
+		setTab("knowledge");
+	};
+
+	const renderSearchResult = (
+		item: RetrievedFragment,
+		kind: "text" | "vector",
+	) => {
+		const primaryLabel = kind === "text" ? "text" : "vector";
+		const primaryScore = kind === "text" ? item.textScore : item.vectorScore;
+		const secondaryLabel = kind === "text" ? "vector" : "text";
+		const secondaryScore = kind === "text" ? item.vectorScore : item.textScore;
+		const resultTitle = toResultTitle(item);
+		return (
+			<article className="google-result">
+				<div className="google-result-attribution">
+					<span className="google-result-category">{item.sourceCategory}</span>
+					<span className="google-result-uri">{item.sourceUri}</span>
+					<span className="google-result-locator">{item.locator}</span>
+				</div>
+				<h4>
+					{item.wikiSlug ? (
+						<button
+							type="button"
+							className="google-result-title-link"
+							onClick={() => openKnowledgeFromSearch(item.wikiSlug)}
+							title={`Open wiki page: ${item.wikiSlug}`}
+						>
+							{resultTitle}
+						</button>
+					) : (
+						<span className="google-result-title-disabled">{resultTitle}</span>
+					)}
+				</h4>
+				<p>{item.content}</p>
+				<div className="google-result-meta">
+					<span>
+						{primaryLabel}={formatScore(primaryScore)}
+					</span>
+					<span>
+						{secondaryLabel}={formatScore(secondaryScore)}
+					</span>
+					<span>combined={formatScore(item.combinedScore)}</span>
+				</div>
+				<div className="google-result-links">
+					{item.wikiSlug ? (
+						<button
+							type="button"
+							className="google-link-btn"
+							onClick={() => openKnowledgeFromSearch(item.wikiSlug)}
+							title={`Open wiki page: ${item.wikiSlug}`}
+						>
+							wiki: {item.wikiSlug}
+						</button>
+					) : (
+						<span className="google-link-disabled">wiki: unavailable</span>
+					)}
+					{item.wikiRawPath ? (
+						<a
+							href={item.wikiRawPath}
+							target="_blank"
+							rel="noreferrer"
+							className="google-link-anchor"
+							title="Open markdown document"
+						>
+							doc
+						</a>
+					) : (
+						<span className="google-link-disabled">doc: unavailable</span>
+					)}
+				</div>
+			</article>
+		);
 	};
 
 	return (
@@ -218,7 +371,12 @@ export function App() {
 
 			{errorText ? <div className="status error">{errorText}</div> : null}
 
-			{tab === "knowledge" ? <KnowledgeWorkspace /> : null}
+			{tab === "knowledge" ? (
+				<KnowledgeWorkspace
+					requestedSlug={knowledgeSelection.slug}
+					requestedAt={knowledgeSelection.at}
+				/>
+			) : null}
 
 			{tab === "chat" ? (
 				<main className="layout columns-3">
@@ -271,6 +429,21 @@ export function App() {
 							))}
 						</div>
 						<div className="composer">
+							<div className="composer-controls">
+								<label htmlFor="chat-category">Category</label>
+								<select
+									id="chat-category"
+									value={chatCategory}
+									onChange={(event) => setChatCategory(event.target.value)}
+								>
+									<option value="all">All categories</option>
+									{availableCategories.map((category) => (
+										<option key={category} value={category}>
+											{category}
+										</option>
+									))}
+								</select>
+							</div>
 							<textarea
 								value={composerText}
 								onChange={(event) => setComposerText(event.target.value)}
@@ -321,6 +494,19 @@ export function App() {
 							{retrievalLogs.map((log) => (
 								<div key={log.id} className="list-item">
 									<div>{log.query}</div>
+									{(() => {
+										const summary = toRetrievalLogContextSummary(log.context);
+										if (!summary.retrievalStrategy) return null;
+										return (
+											<small>
+												strategy={summary.retrievalStrategy} selected=
+												{summary.selectedCount ?? "-"} vector=
+												{summary.vectorCount ?? "-"} text=
+												{summary.textCount ?? "-"} merged=
+												{summary.mergedCount ?? "-"}
+											</small>
+										);
+									})()}
 									<small>{formatDateTime(log.createdAt)}</small>
 								</div>
 							))}
@@ -334,35 +520,92 @@ export function App() {
 					<section className="panel">
 						<div className="panel-header">
 							<h2>Fragment Search</h2>
-							<div className="actions">
-								<button
-									type="button"
-									onClick={handleSearchFragments}
-									disabled={busy}
-								>
-									<FlaskConical className="icon" />
-									<span>Run</span>
-								</button>
+						</div>
+						<div className="search-row-advanced">
+							<select
+								value={searchCategory}
+								onChange={(event) => setSearchCategory(event.target.value)}
+								className="search-select"
+							>
+								<option value="all">All categories</option>
+								{availableCategories.map((category) => (
+									<option key={category} value={category}>
+										{category}
+									</option>
+								))}
+							</select>
+							<div className="search-input-wrapper">
+								<input
+									value={searchQuery}
+									onChange={(event) => setSearchQuery(event.target.value)}
+									placeholder="Search knowledge fragments..."
+									className="search-input"
+									onKeyDown={(event) => {
+										if (event.key === "Enter") {
+											void handleSearchFragments();
+										}
+									}}
+								/>
 							</div>
+							<button
+								type="button"
+								className="search-btn btn-primary"
+								onClick={handleSearchFragments}
+								disabled={busy}
+							>
+								<Search className="icon" />
+								<span>Search</span>
+							</button>
 						</div>
-						<div className="search-row">
-							<input
-								value={searchQuery}
-								onChange={(event) => setSearchQuery(event.target.value)}
-								placeholder="Search query"
-							/>
-						</div>
-						<div className="list">
-							{searchResults.map((item) => (
-								<article key={item.id} className="artifact-row">
-									<header>
-										<strong>{item.heading ?? item.sourceUri}</strong>
-										<small>score={item.combinedScore.toFixed(4)}</small>
-									</header>
-									<small>{item.locator}</small>
-									<p>{item.content}</p>
-								</article>
-							))}
+						<div className="list search-list">
+							{searchResults ? (
+								<div className="search-results-grid">
+									<div className="search-results-summary">
+										<span>strategy={searchResults.strategy}</span>
+										<span>selected={searchResults.selectedResults.length}</span>
+										<span>merged={searchResults.mergedResults.length}</span>
+									</div>
+									<section className="search-results-column">
+										<header className="search-results-column-header">
+											<h3>Full-text Search</h3>
+											<small>{searchResults.textResults.length} hits</small>
+										</header>
+										<div className="search-results-column-list">
+											{searchResults.textResults.length > 0 ? (
+												searchResults.textResults.map((item) => (
+													<div key={`text-${item.id}`}>
+														{renderSearchResult(item, "text")}
+													</div>
+												))
+											) : (
+												<div className="tree-info">No full-text hits.</div>
+											)}
+										</div>
+									</section>
+									<section className="search-results-column">
+										<header className="search-results-column-header">
+											<h3>Vector Search</h3>
+											<small>{searchResults.vectorResults.length} hits</small>
+										</header>
+										<div className="search-results-column-list">
+											{searchResults.vectorResults.length > 0 ? (
+												searchResults.vectorResults.map((item) => (
+													<div key={`vector-${item.id}`}>
+														{renderSearchResult(item, "vector")}
+													</div>
+												))
+											) : (
+												<div className="tree-info">No vector hits.</div>
+											)}
+										</div>
+									</section>
+								</div>
+							) : (
+								<div className="tree-info">
+									Run search to compare full-text and vector results side by
+									side.
+								</div>
+							)}
 						</div>
 					</section>
 				</main>

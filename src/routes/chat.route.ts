@@ -25,6 +25,12 @@ const ChatRequestSchema = z.object({
 	conversationId: z.string().uuid().optional(),
 	messages: z.array(ChatMessageSchema).min(1),
 	topK: z.number().int().min(1).max(20).optional(),
+	category: z
+		.string()
+		.trim()
+		.min(1)
+		.regex(/^[^/]+$/, "Invalid category")
+		.optional(),
 });
 
 const ConversationsQuerySchema = z.object({
@@ -151,6 +157,7 @@ export function createChatRoute(deps: ChatRouteDeps) {
 				messages: body.messages as ChatMessage[],
 				conversationId: body.conversationId,
 				topK: body.topK,
+				category: body.category,
 			});
 			return c.json(result);
 		})
@@ -163,6 +170,7 @@ export function createChatRoute(deps: ChatRouteDeps) {
 						messages: body.messages as ChatMessage[],
 						conversationId: body.conversationId,
 						topK: body.topK,
+						category: body.category,
 					});
 
 					await stream.writeSSE({

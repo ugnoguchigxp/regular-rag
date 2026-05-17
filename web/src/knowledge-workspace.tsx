@@ -115,6 +115,42 @@ const formatDateTime = (value: string | null | undefined): string => {
 	return date.toLocaleString();
 };
 
+const normalizeTags = (value: unknown): string[] => {
+	if (Array.isArray(value)) {
+		return [
+			...new Set(value.map((item) => String(item).trim()).filter(Boolean)),
+		];
+	}
+	if (typeof value === "string") {
+		return [
+			...new Set(
+				value
+					.split(/[\n,]/)
+					.map((item) => item.trim())
+					.filter(Boolean),
+			),
+		];
+	}
+	return [];
+};
+
+const tagsInputFromMeta = (meta: Record<string, unknown>): string =>
+	normalizeTags(meta.tags).join(", ");
+
+const applyTagsToMeta = (
+	meta: Record<string, unknown>,
+	tagsInput: string,
+): Record<string, unknown> => {
+	const tags = normalizeTags(tagsInput);
+	const next = { ...meta };
+	if (tags.length === 0) {
+		delete next.tags;
+		return next;
+	}
+	next.tags = tags;
+	return next;
+};
+
 const sortExplorerNodes = (nodes: ExplorerNode[]): ExplorerNode[] =>
 	nodes
 		.map((node) =>
@@ -194,7 +230,27 @@ const collectFolderPaths = (nodes: ExplorerNode[]): string[] =>
 			: [],
 	);
 
-export function KnowledgeWorkspace() {
+const folderAncestors = (folderPath: string): string[] => {
+	const normalized = trimSlug(folderPath);
+	if (!normalized) return [];
+	const segments = normalized.split("/").filter(Boolean);
+	const results: string[] = [];
+	for (let index = 0; index < segments.length; index += 1) {
+		const candidate = segments.slice(0, index + 1).join("/");
+		results.push(candidate);
+	}
+	return results;
+};
+
+type KnowledgeWorkspaceProps = {
+	requestedSlug?: string | null;
+	requestedAt?: number;
+};
+
+export function KnowledgeWorkspace({
+	requestedSlug = null,
+	requestedAt = 0,
+}: KnowledgeWorkspaceProps) {
 	const [loading, setLoading] = useState(false);
 	const [mutating, setMutating] = useState(false);
 	const [errorText, setErrorText] = useState<string | null>(null);
@@ -221,9 +277,9 @@ export function KnowledgeWorkspace() {
 
 	const [draftSlug, setDraftSlug] = useState("");
 	const [draftTitle, setDraftTitle] = useState("");
+	const [draftTags, setDraftTags] = useState("");
 	const [draftBody, setDraftBody] = useState(initialBody);
 	const [draftMeta, setDraftMeta] = useState<Record<string, unknown>>({});
-	const [commitMessage, setCommitMessage] = useState("");
 
 	const [sourceHistory, setSourceHistory] = useState<SourceHistoryItem[]>([]);
 	const [diffFrom, setDiffFrom] = useState("");
@@ -248,9 +304,9 @@ export function KnowledgeWorkspace() {
 	const clearDraft = () => {
 		setDraftSlug("");
 		setDraftTitle("");
+		setDraftTags("");
 		setDraftBody(initialBody);
 		setDraftMeta({});
-		setCommitMessage("");
 	};
 
 	const withMutating = async (task: () => Promise<void>) => {
@@ -314,6 +370,36 @@ export function KnowledgeWorkspace() {
 	}, [sourceSearchQuery]);
 
 	useEffect(() => {
+		if (requestedAt === 0) return;
+		if (!requestedSlug) return;
+		if (!existingSlugs.has(requestedSlug)) return;
+		const selectedItem = sourceTree.items.find(
+			(item) => item.slug === requestedSlug,
+		);
+		const selectedPath = selectedItem?.path ?? "";
+		const folderPath = parentPathOf(selectedPath);
+		setIsCreating(false);
+		setMode("view");
+		setSelectedSlug(requestedSlug);
+		setSelectedFolderPath(folderPath || null);
+		setSourceSearchQuery("");
+		setSourceSearchHits([]);
+		setDiffFrom("");
+		setDiffTo("");
+		setSourceDiff("");
+		if (folderPath) {
+			setExpandedFolders((current) => {
+				const next = new Set(current);
+				for (const path of folderAncestors(folderPath)) {
+					next.add(path);
+				}
+				return next;
+			});
+		}
+		setStatusText(`Selected: ${requestedSlug}`);
+	}, [existingSlugs, requestedAt, requestedSlug, sourceTree.items]);
+
+	useEffect(() => {
 		if (isCreating) return;
 		if (selectedSlug !== null) return;
 		if (!sourceTree.items[0]) return;
@@ -338,11 +424,11 @@ export function KnowledgeWorkspace() {
 				if (cancelled) return;
 				setDraftSlug(page.slug);
 				setDraftTitle(page.title);
+				setDraftTags(tagsInputFromMeta(page.meta));
 				setDraftBody(page.body);
 				setDraftMeta(page.meta);
 				setSelectedPagePath(page.path);
 				setSourceHistory(history);
-				setCommitMessage("");
 			} catch (error) {
 				if (cancelled) return;
 				setErrorText(
@@ -408,9 +494,9 @@ export function KnowledgeWorkspace() {
 		setSelectedPagePath("");
 		setDraftSlug(nextSlug);
 		setDraftTitle("Untitled");
+		setDraftTags("");
 		setDraftBody(initialBody);
 		setDraftMeta({});
-		setCommitMessage("");
 		setDiffFrom("");
 		setDiffTo("");
 		setSourceDiff("");
@@ -563,7 +649,6 @@ export function KnowledgeWorkspace() {
 				title: draftTitle.trim(),
 				body: draftBody,
 				meta: draftMeta,
-				commitMessage: commitMessage.trim() || undefined,
 			});
 			await refreshTree();
 			const nextSlug = result.slug ?? normalizedSlug;
@@ -1007,16 +1092,18 @@ export function KnowledgeWorkspace() {
 							onChange={(event) => setDraftTitle(event.target.value)}
 						/>
 					</label>
-					{!isCreating ? (
-						<label className="span-2">
-							Commit message (optional)
-							<input
-								value={commitMessage}
-								onChange={(event) => setCommitMessage(event.target.value)}
-								placeholder={`docs(page): update ${selectedSlug || "home"}`}
-							/>
-						</label>
-					) : null}
+					<label className="span-2">
+						Tags (comma separated)
+						<input
+							value={draftTags}
+							onChange={(event) => {
+								const value = event.target.value;
+								setDraftTags(value);
+								setDraftMeta((prev) => applyTagsToMeta(prev, value));
+							}}
+							placeholder="hono, rag, postgres"
+						/>
+					</label>
 				</div>
 
 				{errorText ? (

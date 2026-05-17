@@ -7,6 +7,7 @@
 
 # build
 /dist
+/dist-web
 /build
 *.tgz
 /bun.lock
@@ -29,9 +30,13 @@ bun.lockb
 Thumbs.db
 
 # Drizzle / DB
-/drizzle
+/drizzle/*
+!/drizzle/*.sql
+/drizzle/meta/
 .db-data/
 
 # coverage
 /coverage
 
+# wiki content
+/wiki-knowledge

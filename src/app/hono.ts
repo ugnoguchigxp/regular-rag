@@ -89,6 +89,20 @@ app.use("*", logger());
 app.use("/api/*", cors());
 app.onError((error, c) => {
 	console.error(error);
+	const dbError = error as { code?: string; message?: string };
+	if (
+		dbError.code === "42703" &&
+		typeof dbError.message === "string" &&
+		dbError.message.includes("category")
+	) {
+		return c.json(
+			{
+				message:
+					'Database schema is outdated. Run "bun run db:migrate" and retry.',
+			},
+			500,
+		);
+	}
 	return c.json(
 		{
 			message: error instanceof Error ? error.message : "Internal server error",

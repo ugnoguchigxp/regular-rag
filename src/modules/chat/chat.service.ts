@@ -12,7 +12,10 @@ import type { LlmProvider } from "../../providers/types";
 import type { ChatMessage } from "../../types/llm";
 import { extractArtifactsFromText } from "../artifacts/extract";
 import type { Artifact } from "../artifacts/types";
-import type { SourceRetriever } from "../rag/retriever";
+import {
+	evaluateRetrieverCompat,
+	type SourceRetriever,
+} from "../rag/retriever";
 import type { Citation, RetrievedFragment } from "../rag/types";
 
 export type ChatResult = {
@@ -39,6 +42,7 @@ type ChatRequest = {
 	messages: ChatMessage[];
 	conversationId?: string;
 	topK?: number;
+	category?: string;
 };
 
 function toCitations(retrieved: RetrievedFragment[]): Citation[] {
@@ -46,6 +50,7 @@ function toCitations(retrieved: RetrievedFragment[]): Citation[] {
 		sourceId: item.sourceId,
 		fragmentId: item.id,
 		uri: item.sourceUri,
+		category: item.sourceCategory,
 		title: item.heading ?? item.sourceUri.split("/").at(-1) ?? "Untitled",
 		heading: item.heading ?? undefined,
 		locator: item.locator,
@@ -109,10 +114,17 @@ export class ChatService {
 			[...request.messages].reverse().find((message) => message.role === "user")
 				?.content ?? "";
 		const topK = request.topK ?? 8;
-		const retrieved = await this.deps.retriever.retrieve(lastUserMessage, {
-			topK,
-			enableTrigramFallback: true,
-		});
+		const category = request.category?.trim() || undefined;
+		const evaluation = await evaluateRetrieverCompat(
+			this.deps.retriever,
+			lastUserMessage,
+			{
+				topK,
+				enableTrigramFallback: true,
+				category,
+			},
+		);
+		const retrieved = evaluation.selectedResults;
 		const citations = toCitations(retrieved);
 		const context = buildContext(retrieved);
 		const systemPrompt = buildSystemPrompt(context);
@@ -171,16 +183,38 @@ export class ChatService {
 			messageId: assistantMessage.id,
 			query: lastUserMessage,
 			fragmentIds: retrieved.map((item) => item.id),
-			scores: retrieved.map((item) => ({
-				id: item.id,
-				combinedScore: item.combinedScore,
-				vectorScore: item.vectorScore,
-				textScore: item.textScore,
-				trigramScore: item.trigramScore,
-			})),
+			scores: {
+				selected: retrieved.map((item) => ({
+					id: item.id,
+					combinedScore: item.combinedScore,
+					vectorScore: item.vectorScore,
+					textScore: item.textScore,
+					trigramScore: item.trigramScore,
+				})),
+				vector: evaluation.vectorResults.map((item) => ({
+					id: item.id,
+					vectorScore: item.vectorScore,
+				})),
+				text: evaluation.textResults.map((item) => ({
+					id: item.id,
+					textScore: item.textScore,
+				})),
+				merged: evaluation.mergedResults.map((item) => ({
+					id: item.id,
+					combinedScore: item.combinedScore,
+					vectorScore: item.vectorScore,
+					textScore: item.textScore,
+				})),
+			},
 			context: {
 				userMessageId,
 				contextLength: context.length,
+				category: category ?? "all",
+				retrievalStrategy: evaluation.strategy,
+				selectedCount: retrieved.length,
+				vectorCount: evaluation.vectorResults.length,
+				textCount: evaluation.textResults.length,
+				mergedCount: evaluation.mergedResults.length,
 			},
 		});
 

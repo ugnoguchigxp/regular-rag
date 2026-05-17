@@ -7,7 +7,7 @@ const EnvSchema = z.object({
 		.string()
 		.min(1)
 		.default("postgres://postgres:postgres@localhost:5432/regular_rag"),
-	REGULAR_RAG_CONTENT_ROOT: z.string().default("../wiki-knowledge"),
+	REGULAR_RAG_CONTENT_ROOT: z.string().default("./wiki-knowledge"),
 });
 
 export type AppEnv = {

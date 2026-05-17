@@ -1,8 +1,11 @@
 import { createHash } from "node:crypto";
 import {
 	and,
+	asc,
 	desc,
 	eq,
+	gt,
+	inArray,
 	ilike,
 	notInArray,
 	or,
@@ -18,10 +21,12 @@ export type SourceKind = "wiki";
 
 export type UpsertSourceParams = {
 	sourceKind: SourceKind;
+	category: string;
 	uri: string;
 	title?: string;
 	body: string;
 	contentHash?: string;
+	embedFragments?: boolean;
 	metadata?: Record<string, unknown>;
 };
 
@@ -29,10 +34,23 @@ export type SourceSearchResult = {
 	id: string;
 	sourceId: string;
 	sourceUri: string;
+	sourceCategory: string;
+	sourceMetadata: unknown;
 	locator: string;
 	heading: string | null;
 	content: string;
 	score: number;
+};
+
+export type PendingSourceFragmentEmbedding = {
+	id: string;
+	sourceId: string;
+	sourceUri: string;
+	sourceCategory: string;
+	sourceMetadata: unknown;
+	locator: string;
+	content: string;
+	createdAt: Date;
 };
 
 function defaultHash(input: string): string {
@@ -112,6 +130,7 @@ export class SourceRepository {
 		sourceId: string;
 		title?: string | null;
 		body: string;
+		embedFragments: boolean;
 		metadata?: Record<string, unknown>;
 	}): Promise<number> {
 		await this.db
@@ -135,7 +154,9 @@ export class SourceRepository {
 						content: chunk.content,
 						searchVector: sql`to_tsvector('simple', ${chunk.content})`,
 						metadata: metadataJson,
-						embedding: await this.tryEmbed(chunk.content),
+						embedding: params.embedFragments
+							? await this.tryEmbed(chunk.content)
+							: undefined,
 					};
 				}),
 			),
@@ -143,7 +164,23 @@ export class SourceRepository {
 		return chunks.length;
 	}
 
+	private ensureEmbeddingShape(embedding: number[]): void {
+		if (embedding.length !== 1536) {
+			throw new Error(
+				`Embedding dimension mismatch: expected 1536, got ${embedding.length}`,
+			);
+		}
+		if (
+			!embedding.every(
+				(value) => typeof value === "number" && Number.isFinite(value),
+			)
+		) {
+			throw new Error("Invalid embedding values.");
+		}
+	}
+
 	async upsertSourceDocument(params: UpsertSourceParams): Promise<string> {
+		const embedFragments = params.embedFragments ?? true;
 		const contentHash =
 			params.contentHash ??
 			defaultHash(`${params.sourceKind}\n${params.uri}\n${params.body}`);
@@ -159,6 +196,7 @@ export class SourceRepository {
 					.update(sources)
 					.set({
 						title: params.title ?? null,
+						category: params.category,
 						metadata: params.metadata ?? {},
 						updatedAt: new Date(),
 						lastIndexedAt: new Date(),
@@ -171,6 +209,7 @@ export class SourceRepository {
 				.update(sources)
 				.set({
 					sourceKind: params.sourceKind,
+					category: params.category,
 					uri: params.uri,
 					title: params.title ?? null,
 					body: params.body,
@@ -184,6 +223,7 @@ export class SourceRepository {
 				sourceId: existing.id,
 				title: params.title,
 				body: params.body,
+				embedFragments,
 				metadata: params.metadata,
 			});
 			return existing.id;
@@ -193,6 +233,7 @@ export class SourceRepository {
 			.insert(sources)
 			.values({
 				sourceKind: params.sourceKind,
+				category: params.category,
 				uri: params.uri,
 				title: params.title ?? null,
 				body: params.body,
@@ -206,6 +247,7 @@ export class SourceRepository {
 			sourceId: inserted.id,
 			title: params.title,
 			body: params.body,
+			embedFragments,
 			metadata: params.metadata,
 		});
 		return inserted.id;
@@ -238,16 +280,64 @@ export class SourceRepository {
 		return deleted.length;
 	}
 
-	async vectorSearchSourceContent(
-		embedding: number[],
-		limit: number,
-		sourceKinds?: SourceKind[],
-	): Promise<SourceSearchResult[]> {
-		const embeddingStr = JSON.stringify(embedding);
-		const similarity = sql<number>`1 - (${sourceFragments.embedding} <=> ${embeddingStr}::vector)`;
-		const conditions: SQL[] = [sql`${sourceFragments.embedding} IS NOT NULL`];
-		if (sourceKinds && sourceKinds.length > 0) {
-			conditions.push(sql`${sources.sourceKind} = ANY(${sourceKinds})`);
+	async listCategories(
+		sourceKinds: SourceKind[] = ["wiki"],
+	): Promise<string[]> {
+		const conditions: SQL[] = [];
+		if (sourceKinds.length > 0) {
+			conditions.push(inArray(sources.sourceKind, sourceKinds));
+		}
+		const query = this.db
+			.selectDistinct({
+				category: sources.category,
+			})
+			.from(sources)
+			.orderBy(asc(sources.category));
+		const rows =
+			conditions.length > 0
+				? await query.where(and(...conditions))
+				: await query;
+		return rows
+			.map((row) => row.category.trim())
+			.filter((category) => category.length > 0);
+	}
+
+	async countPendingSourceFragmentEmbeddings(
+		sourceKinds: SourceKind[] = ["wiki"],
+	): Promise<number> {
+		const conditions: SQL[] = [sql`${sourceFragments.embedding} IS NULL`];
+		if (sourceKinds.length > 0) {
+			conditions.push(inArray(sources.sourceKind, sourceKinds));
+		}
+		const [row] = await this.db
+			.select({ count: sql<number>`cast(count(*) as integer)` })
+			.from(sourceFragments)
+			.innerJoin(sources, eq(sources.id, sourceFragments.sourceId))
+			.where(and(...conditions))
+			.limit(1);
+		return row?.count ?? 0;
+	}
+
+	async listPendingSourceFragmentEmbeddings(params: {
+		limit: number;
+		sourceKinds?: SourceKind[];
+		after?: { createdAt: Date; id: string };
+	}): Promise<PendingSourceFragmentEmbedding[]> {
+		const sourceKinds = params.sourceKinds ?? ["wiki"];
+		const conditions: SQL[] = [sql`${sourceFragments.embedding} IS NULL`];
+		if (sourceKinds.length > 0) {
+			conditions.push(inArray(sources.sourceKind, sourceKinds));
+		}
+		if (params.after) {
+			conditions.push(
+				or(
+					gt(sourceFragments.createdAt, params.after.createdAt),
+					and(
+						eq(sourceFragments.createdAt, params.after.createdAt),
+						gt(sourceFragments.id, params.after.id),
+					),
+				) as SQL,
+			);
 		}
 
 		const rows = await this.db
@@ -255,6 +345,61 @@ export class SourceRepository {
 				id: sourceFragments.id,
 				sourceId: sourceFragments.sourceId,
 				sourceUri: sources.uri,
+				sourceCategory: sources.category,
+				sourceMetadata: sources.metadata,
+				locator: sourceFragments.locator,
+				content: sourceFragments.content,
+				createdAt: sourceFragments.createdAt,
+			})
+			.from(sourceFragments)
+			.innerJoin(sources, eq(sources.id, sourceFragments.sourceId))
+			.where(and(...conditions))
+			.orderBy(asc(sourceFragments.createdAt), asc(sourceFragments.id))
+			.limit(params.limit);
+
+		return rows as PendingSourceFragmentEmbedding[];
+	}
+
+	async createEmbeddingForContent(content: string): Promise<number[]> {
+		const embedding = await this.embeddingProvider.createEmbedding(content);
+		this.ensureEmbeddingShape(embedding);
+		return embedding;
+	}
+
+	async updateSourceFragmentEmbedding(
+		fragmentId: string,
+		embedding: number[],
+	): Promise<void> {
+		this.ensureEmbeddingShape(embedding);
+		await this.db
+			.update(sourceFragments)
+			.set({ embedding })
+			.where(eq(sourceFragments.id, fragmentId));
+	}
+
+	async vectorSearchSourceContent(
+		embedding: number[],
+		limit: number,
+		sourceKinds?: SourceKind[],
+		categories?: string[],
+	): Promise<SourceSearchResult[]> {
+		const embeddingStr = JSON.stringify(embedding);
+		const similarity = sql<number>`1 - (${sourceFragments.embedding} <=> ${embeddingStr}::vector)`;
+		const conditions: SQL[] = [sql`${sourceFragments.embedding} IS NOT NULL`];
+		if (sourceKinds && sourceKinds.length > 0) {
+			conditions.push(inArray(sources.sourceKind, sourceKinds));
+		}
+		if (categories && categories.length > 0) {
+			conditions.push(inArray(sources.category, categories));
+		}
+
+		const rows = await this.db
+			.select({
+				id: sourceFragments.id,
+				sourceId: sourceFragments.sourceId,
+				sourceUri: sources.uri,
+				sourceCategory: sources.category,
+				sourceMetadata: sources.metadata,
 				locator: sourceFragments.locator,
 				heading: sourceFragments.heading,
 				content: sourceFragments.content,
@@ -273,6 +418,7 @@ export class SourceRepository {
 		query: string,
 		limit: number,
 		sourceKinds?: SourceKind[],
+		categories?: string[],
 	): Promise<SourceSearchResult[]> {
 		const trimmedQuery = query.trim();
 		if (!trimmedQuery) return [];
@@ -298,7 +444,10 @@ export class SourceRepository {
 			),
 		];
 		if (sourceKinds && sourceKinds.length > 0) {
-			conditions.push(sql`${sources.sourceKind} = ANY(${sourceKinds})`);
+			conditions.push(inArray(sources.sourceKind, sourceKinds));
+		}
+		if (categories && categories.length > 0) {
+			conditions.push(inArray(sources.category, categories));
 		}
 
 		const rows = await this.db
@@ -306,6 +455,8 @@ export class SourceRepository {
 				id: sourceFragments.id,
 				sourceId: sourceFragments.sourceId,
 				sourceUri: sources.uri,
+				sourceCategory: sources.category,
+				sourceMetadata: sources.metadata,
 				locator: sourceFragments.locator,
 				heading: sourceFragments.heading,
 				content: sourceFragments.content,

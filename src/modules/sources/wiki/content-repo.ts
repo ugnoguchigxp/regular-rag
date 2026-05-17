@@ -4,6 +4,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import matter from "gray-matter";
+import {
+	categoryFromPageRelativePath,
+	DEFAULT_WIKI_CATEGORY,
+} from "./category";
 import { sanitizeMarkdownBody, sanitizePlainText } from "./sanitize";
 import { assertSafeSlug, filePathToSlug } from "./slug";
 
@@ -79,13 +83,27 @@ export const ensureContentRoot = async (contentRoot: string): Promise<void> => {
 	const pagesRoot = pagesDirectory(contentRoot);
 	await fs.mkdir(pagesRoot, { recursive: true });
 	await fs.mkdir(path.resolve(contentRoot, "wiki"), { recursive: true });
-	const homePath = path.resolve(pagesRoot, "index.md");
+	const categoryRoot = path.resolve(pagesRoot, DEFAULT_WIKI_CATEGORY);
+	await fs.mkdir(categoryRoot, { recursive: true });
+	const homePath = path.resolve(categoryRoot, "index.md");
+	const legacyHomePath = path.resolve(pagesRoot, "index.md");
+	let hasCategoryHome = false;
 	try {
 		await fs.access(homePath);
+		hasCategoryHome = true;
 	} catch {
+		try {
+			await fs.access(legacyHomePath);
+			await fs.rename(legacyHomePath, homePath);
+			hasCategoryHome = true;
+		} catch {
+			// ignore when legacy file does not exist
+		}
+	}
+	if (!hasCategoryHome) {
 		await fs.writeFile(
 			homePath,
-			"# Home\n\nWelcome to wiki-knowledge.\n",
+			"# Tech Home\n\nWelcome to wiki-knowledge.\n",
 			"utf8",
 		);
 	}
@@ -142,7 +160,9 @@ export const listPages = async (
 			updatedAt: file.updatedAt,
 		};
 	});
-	return items.sort((a, b) => a.slug.localeCompare(b.slug));
+	return items
+		.filter((item) => categoryFromPageRelativePath(item.path) !== null)
+		.sort((a, b) => a.slug.localeCompare(b.slug));
 };
 
 export const listFolders = async (
@@ -157,9 +177,12 @@ export const listFolders = async (
 const resolveCandidateRelativePaths = (slug: string): string[] => {
 	const safe = assertSafeSlug(slug);
 	if (safe === "") {
-		return ["index.md"];
+		return [];
 	}
-	return [`${safe}.md`, path.join(safe, "index.md")];
+	if (safe.includes("/")) {
+		return [`${safe}.md`, path.join(safe, "index.md")];
+	}
+	return [path.join(safe, "index.md"), `${safe}.md`];
 };
 
 const findExistingPageRelativePath = async (
@@ -193,6 +216,13 @@ function firstMarkdownHeading(body: string): string | null {
 	return null;
 }
 
+const toMetaRecord = (value: unknown): Record<string, unknown> => {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return {};
+	}
+	return { ...(value as Record<string, unknown>) };
+};
+
 export const readPage = async (
 	contentRoot: string,
 	slug: string,
@@ -202,16 +232,26 @@ export const readPage = async (
 		const absolute = assertInsidePages(contentRoot, candidate);
 		try {
 			const raw = await fs.readFile(absolute, "utf8");
+			const parsed = matter(raw);
 			const relativePath = path.relative(pagesDirectory(contentRoot), absolute);
 			const normalizedPath = normalizePosixPath(relativePath);
+			if (categoryFromPageRelativePath(normalizedPath) === null) {
+				continue;
+			}
 			const normalizedSlug = filePathToSlug(normalizedPath);
-			const title = firstMarkdownHeading(raw) ?? (normalizedSlug || "Home");
+			const meta = toMetaRecord(parsed.data);
+			const metaTitle = typeof meta.title === "string" ? meta.title.trim() : "";
+			const title =
+				metaTitle ||
+				firstMarkdownHeading(parsed.content) ||
+				normalizedSlug ||
+				"Home";
 			return {
 				slug: normalizedSlug,
 				title,
-				body: raw,
+				body: parsed.content,
 				path: normalizedPath,
-				meta: {},
+				meta,
 			};
 		} catch (error) {
 			if (!isNotFoundError(error)) {
@@ -244,6 +284,9 @@ const resolveWritePath = (
 	relativePath?: string,
 ): string => {
 	const safe = assertSafeSlug(slug);
+	if (safe === "") {
+		throw new Error("Top-level page is not allowed");
+	}
 	if (relativePath) {
 		const normalizedRelativePath = normalizePosixPath(relativePath);
 		if (
@@ -254,7 +297,7 @@ const resolveWritePath = (
 		}
 		return assertInsidePages(contentRoot, normalizedRelativePath);
 	}
-	const relative = safe === "" ? "index.md" : `${safe}.md`;
+	const relative = safe.includes("/") ? `${safe}.md` : `${safe}/index.md`;
 	return assertInsidePages(contentRoot, relative);
 };
 

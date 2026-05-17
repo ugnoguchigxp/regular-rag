@@ -106,6 +106,7 @@ export const sources = pgTable(
 	{
 		id: uuid("id").defaultRandom().primaryKey(),
 		sourceKind: text("source_kind").notNull(),
+		category: text("category").default("tech").notNull(),
 		uri: text("uri").notNull(),
 		title: text("title"),
 		body: text("body").notNull(),
@@ -122,6 +123,10 @@ export const sources = pgTable(
 	(table) => ({
 		uriUniqueIdx: uniqueIndex("sources_uri_idx").on(table.uri),
 		sourceKindIdx: index("sources_source_kind_idx").on(table.sourceKind),
+		sourceKindCategoryIdx: index("sources_source_kind_category_idx").on(
+			table.sourceKind,
+			table.category,
+		),
 		contentHashIdx: index("sources_content_hash_idx").on(table.contentHash),
 		bodyTrgmIdx: index("sources_body_trgm_idx").using(
 			"gin",

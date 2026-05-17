@@ -14,6 +14,10 @@ export type SourceTreeResponse = {
 	folders: SourceFolder[];
 };
 
+export type SourceCategoryResponse = {
+	items: string[];
+};
+
 export type SourcePage = {
 	slug: string;
 	title: string;
@@ -39,6 +43,11 @@ export type SourceMutationResponse = {
 	hash?: string;
 	movedPages?: Array<{ from: string; to: string }>;
 	deletedSlugs?: string[];
+	reindexed?: {
+		importedFiles: number;
+		skippedFiles: number;
+		removedSources: number;
+	};
 };
 
 export type SourceReindexResponse = {
@@ -52,6 +61,7 @@ export type Citation = {
 	sourceId: string;
 	fragmentId: string;
 	uri: string;
+	category: string;
 	title: string;
 	heading?: string;
 	locator: string;
@@ -62,9 +72,13 @@ export type RetrievedFragment = {
 	id: string;
 	sourceId: string;
 	sourceUri: string;
+	sourceCategory: string;
 	locator: string;
 	heading: string | null;
 	content: string;
+	wikiSlug?: string | null;
+	wikiApiPath?: string | null;
+	wikiRawPath?: string | null;
 	vectorScore?: number;
 	textScore?: number;
 	trigramScore?: number;
@@ -174,6 +188,13 @@ const encodeSlug = (slug: string): string =>
 
 export async function fetchSourceTree(): Promise<SourceTreeResponse> {
 	return requestJson("/api/sources/tree");
+}
+
+export async function fetchSourceCategories(): Promise<string[]> {
+	const data = await requestJson<SourceCategoryResponse>(
+		"/api/sources/categories",
+	);
+	return data.items;
 }
 
 export async function fetchSourceHealth(): Promise<SourceHealth> {
@@ -320,6 +341,7 @@ export async function sendChat(params: {
 	conversationId?: string;
 	messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
 	topK?: number;
+	category?: string;
 }): Promise<ChatCompletionResult> {
 	return requestJson("/api/chat", {
 		method: "POST",
@@ -330,7 +352,17 @@ export async function sendChat(params: {
 export async function searchFragments(params: {
 	query: string;
 	topK?: number;
-}): Promise<{ query: string; results: RetrievedFragment[] }> {
+	category?: string;
+}): Promise<{
+	query: string;
+	topK: number;
+	category: string | null;
+	strategy: "merged" | "text_fallback" | "legacy_retrieve";
+	vectorResults: RetrievedFragment[];
+	textResults: RetrievedFragment[];
+	mergedResults: RetrievedFragment[];
+	selectedResults: RetrievedFragment[];
+}> {
 	return requestJson("/api/search", {
 		method: "POST",
 		body: params,
