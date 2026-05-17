@@ -1,0 +1,338 @@
+export type SourceTreePage = {
+	slug: string;
+	title: string;
+	path: string;
+	updatedAt: string;
+};
+
+export type SourceFolder = {
+	path: string;
+};
+
+export type SourceTreeResponse = {
+	items: SourceTreePage[];
+	folders: SourceFolder[];
+};
+
+export type SourcePage = {
+	slug: string;
+	title: string;
+	body: string;
+	path: string;
+	meta: Record<string, unknown>;
+};
+
+export type SourceHealth = {
+	service: string;
+	git: {
+		branch: string;
+		commit: string;
+	} | null;
+};
+
+export type SourceMutationResponse = {
+	ok: true;
+	slug?: string;
+	path?: string;
+	from?: string;
+	commit: string | null;
+	hash?: string;
+	movedPages?: Array<{ from: string; to: string }>;
+	deletedSlugs?: string[];
+};
+
+export type SourceReindexResponse = {
+	ok: true;
+	importedFiles: number;
+	skippedFiles: number;
+	removedSources: number;
+};
+
+export type Citation = {
+	sourceId: string;
+	fragmentId: string;
+	uri: string;
+	title: string;
+	heading?: string;
+	locator: string;
+	score: number;
+};
+
+export type RetrievedFragment = {
+	id: string;
+	sourceId: string;
+	sourceUri: string;
+	locator: string;
+	heading: string | null;
+	content: string;
+	vectorScore?: number;
+	textScore?: number;
+	trigramScore?: number;
+	combinedScore: number;
+};
+
+export type Artifact = {
+	id: string;
+	type: string;
+	title?: string;
+	content: unknown;
+	version: number;
+	metadata: Record<string, unknown>;
+};
+
+export type ChatCompletionResult = {
+	id: string;
+	conversationId: string;
+	text: string;
+	citations: Citation[];
+	artifacts: Artifact[];
+	retrieved: RetrievedFragment[];
+	usage?: {
+		promptTokens: number;
+		completionTokens: number;
+		totalTokens: number;
+	};
+};
+
+export type ConversationItem = {
+	id: string;
+	title: string | null;
+	metadata: Record<string, unknown>;
+	createdAt: string;
+	updatedAt: string;
+};
+
+export type ConversationMessage = {
+	id: string;
+	role: "system" | "user" | "assistant";
+	content: string;
+	metadata: Record<string, unknown>;
+	createdAt: string;
+	artifacts: Artifact[];
+};
+
+export type RetrievalLog = {
+	id: string;
+	messageId: string | null;
+	query: string;
+	fragmentIds: string[];
+	scores: unknown;
+	context: unknown;
+	createdAt: string;
+};
+
+export type SourceHistoryItem = {
+	commit: string;
+	author: string;
+	date: string;
+	message: string;
+};
+
+type RequestInitJson = Omit<RequestInit, "body"> & {
+	body?: unknown;
+};
+
+async function requestJson<T>(
+	path: string,
+	init?: RequestInitJson,
+): Promise<T> {
+	const headers = new Headers(init?.headers);
+	if (init?.body !== undefined && !headers.has("Content-Type")) {
+		headers.set("Content-Type", "application/json");
+	}
+
+	const { body, ...restInit } = init || {};
+
+	const response = await fetch(path, {
+		...restInit,
+		headers,
+		body: body !== undefined ? JSON.stringify(body) : undefined,
+	});
+	if (!response.ok) {
+		let message = `Request failed: ${response.status}`;
+		try {
+			const data = (await response.json()) as { message?: string };
+			if (data.message) {
+				message = data.message;
+			}
+		} catch {
+			// ignore parse errors for non-JSON responses
+		}
+		throw new Error(message);
+	}
+	return (await response.json()) as T;
+}
+
+const pageEndpoint = (slug: string): string =>
+	`/api/sources/pages/${encodeSlug(slug)}`;
+
+const encodeSlug = (slug: string): string =>
+	slug
+		.split("/")
+		.map((part) => encodeURIComponent(part))
+		.join("/");
+
+export async function fetchSourceTree(): Promise<SourceTreeResponse> {
+	return requestJson("/api/sources/tree");
+}
+
+export async function fetchSourceHealth(): Promise<SourceHealth> {
+	return requestJson("/api/sources/health");
+}
+
+export async function searchSourcePages(
+	query: string,
+): Promise<Array<{ slug: string; excerpt: string }>> {
+	const params = new URLSearchParams({ q: query });
+	const data = await requestJson<{
+		items: Array<{ slug: string; excerpt: string }>;
+	}>(`/api/sources/search?${params.toString()}`);
+	return data.items;
+}
+
+export async function fetchSourcePage(slug: string): Promise<SourcePage> {
+	return requestJson(pageEndpoint(slug));
+}
+
+export async function updateSourcePage(
+	slug: string,
+	params: {
+		slug?: string;
+		title?: string;
+		body: string;
+		meta?: Record<string, unknown>;
+		commitMessage?: string;
+	},
+): Promise<SourceMutationResponse> {
+	return requestJson(pageEndpoint(slug), {
+		method: "PUT",
+		body: {
+			slug: params.slug,
+			title: params.title,
+			body: params.body,
+			meta: params.meta,
+			commitMessage: params.commitMessage,
+		},
+	});
+}
+
+export async function createSourcePage(params: {
+	slug: string;
+	title: string;
+	body: string;
+	meta?: Record<string, unknown>;
+}): Promise<SourceMutationResponse> {
+	return requestJson("/api/sources/pages", {
+		method: "POST",
+		body: params,
+	});
+}
+
+export async function deleteSourcePage(
+	slug: string,
+): Promise<SourceMutationResponse> {
+	return requestJson(pageEndpoint(slug), { method: "DELETE" });
+}
+
+export async function createSourceFolder(
+	folderPath: string,
+): Promise<SourceMutationResponse> {
+	return requestJson("/api/sources/folders", {
+		method: "POST",
+		body: { path: folderPath },
+	});
+}
+
+export async function renameSourceFolder(
+	folderPath: string,
+	nextPath: string,
+): Promise<SourceMutationResponse> {
+	return requestJson(`/api/sources/folders/${encodeSlug(folderPath)}`, {
+		method: "PUT",
+		body: { path: nextPath },
+	});
+}
+
+export async function deleteSourceFolder(
+	folderPath: string,
+): Promise<SourceMutationResponse> {
+	return requestJson(`/api/sources/folders/${encodeSlug(folderPath)}`, {
+		method: "DELETE",
+	});
+}
+
+export async function runSourceReindex(): Promise<SourceReindexResponse> {
+	return requestJson("/api/sources/reindex", { method: "POST" });
+}
+
+export async function fetchSourceHistory(
+	slug: string,
+): Promise<SourceHistoryItem[]> {
+	const data = await requestJson<{ items: SourceHistoryItem[] }>(
+		`/api/sources/history/${encodeSlug(slug)}`,
+	);
+	return data.items;
+}
+
+export async function fetchSourceDiff(
+	slug: string,
+	from: string,
+	to: string,
+): Promise<string> {
+	const query = new URLSearchParams({ from, to });
+	const data = await requestJson<{ diff: string }>(
+		`/api/sources/diff/${encodeSlug(slug)}?${query.toString()}`,
+	);
+	return data.diff;
+}
+
+export async function fetchConversations(
+	limit = 50,
+): Promise<ConversationItem[]> {
+	const params = new URLSearchParams({ limit: String(limit) });
+	const data = await requestJson<{ items: ConversationItem[] }>(
+		`/api/chat/conversations?${params.toString()}`,
+	);
+	return data.items;
+}
+
+export async function fetchConversationMessages(
+	conversationId: string,
+): Promise<ConversationMessage[]> {
+	const data = await requestJson<{ items: ConversationMessage[] }>(
+		`/api/chat/conversations/${conversationId}/messages`,
+	);
+	return data.items;
+}
+
+export async function fetchRetrievalLogs(
+	conversationId: string,
+	limit = 20,
+): Promise<RetrievalLog[]> {
+	const params = new URLSearchParams({ limit: String(limit) });
+	const data = await requestJson<{ items: RetrievalLog[] }>(
+		`/api/chat/conversations/${conversationId}/retrieval-logs?${params.toString()}`,
+	);
+	return data.items;
+}
+
+export async function sendChat(params: {
+	conversationId?: string;
+	messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+	topK?: number;
+}): Promise<ChatCompletionResult> {
+	return requestJson("/api/chat", {
+		method: "POST",
+		body: params,
+	});
+}
+
+export async function searchFragments(params: {
+	query: string;
+	topK?: number;
+}): Promise<{ query: string; results: RetrievedFragment[] }> {
+	return requestJson("/api/search", {
+		method: "POST",
+		body: params,
+	});
+}

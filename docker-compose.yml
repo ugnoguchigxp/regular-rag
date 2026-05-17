@@ -4,8 +4,8 @@ services:
     container_name: regular-rag-db
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: rag_db
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: regular_rag
     ports:
       - "5432:5432"
     volumes:

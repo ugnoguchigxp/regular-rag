@@ -26,7 +26,10 @@ export class ChatbotService {
 		private webSearchService?: WebSearchService,
 	) {}
 
-	private async runWebSearch(query: string, maxResults = 5): Promise<
+	private async runWebSearch(
+		query: string,
+		maxResults = 5,
+	): Promise<
 		Array<{ title: string; url: string; snippet: string; content?: string }>
 	> {
 		if (!this.webSearchService) {
@@ -56,7 +59,12 @@ export class ChatbotService {
 	}
 
 	private buildWebContext(
-		webResults: Array<{ title: string; url: string; snippet: string; content?: string }>,
+		webResults: Array<{
+			title: string;
+			url: string;
+			snippet: string;
+			content?: string;
+		}>,
 	): string {
 		if (webResults.length === 0) {
 			return "";
@@ -204,10 +212,7 @@ export class ChatbotService {
 			if (results.length === 0) {
 				localSearchMissed = true;
 				if (this.webSearchService) {
-					webResults = await this.runWebSearch(
-						normalizedSearchQuery,
-						topK,
-					);
+					webResults = await this.runWebSearch(normalizedSearchQuery, topK);
 					const webContext = this.buildWebContext(webResults);
 					if (webContext) {
 						ragContext = webContext;
@@ -263,7 +268,7 @@ export class ChatbotService {
 				webResults.length > 0
 					? {
 							results: webResults,
-					  }
+						}
 					: undefined,
 		};
 	}

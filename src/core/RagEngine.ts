@@ -4,7 +4,11 @@ import type { Client, Pool } from "pg";
 import type { DbConnection } from "../db";
 import { connectDb, createDbConnection, wrapExternalClient } from "../db";
 import { EMBEDDING_DIMENSIONS } from "../db/schema";
-import type { EmbeddingProvider, LlmProvider, WebSearchProvider } from "../providers/types";
+import type {
+	EmbeddingProvider,
+	LlmProvider,
+	WebSearchProvider,
+} from "../providers/types";
 import { CacheRepository } from "../repositories/CacheRepository";
 import { KnowledgeGraphRepository } from "../repositories/KnowledgeGraphRepository";
 import { RagRepository } from "../repositories/RagRepository";
@@ -182,7 +186,7 @@ export class RagEngine {
 		if (probeEmbedding.length !== expectedDimensions) {
 			throw new Error(
 				`Embedding dimension mismatch. database expects ${expectedDimensions}, provider returned ${probeEmbedding.length}. ` +
-				"Align your Azure embedding deployment with database vector dimensions.",
+					"Align your Azure embedding deployment with database vector dimensions.",
 			);
 		}
 	}
@@ -253,28 +257,40 @@ export class RagEngine {
 	/**
 	 * Web 検索を実行する
 	 */
-	async searchWeb(query: string, maxResults = 5): Promise<Array<{ title: string; url: string; snippet: string; content?: string }>> {
+	async searchWeb(
+		query: string,
+		maxResults = 5,
+	): Promise<
+		Array<{ title: string; url: string; snippet: string; content?: string }>
+	> {
 		if (!this.webSearchService) {
 			throw new Error("WebSearchProvider is not configured in this RagEngine.");
 		}
 
-		const searchResults = await this.webSearchService.search({ query, maxResults });
+		const searchResults = await this.webSearchService.search({
+			query,
+			maxResults,
+		});
 
 		// 上位3件の内容をフェッチする（簡易版）
-		const results = await Promise.all(searchResults.map(async (res: any, idx: number) => {
-			if (idx < 3) {
-				try {
-					const pageContent = await this.webSearchService!.fetchPageContent(res.url);
-					return {
-						...res,
-						content: pageContent.cleanText
-					};
-				} catch (error) {
-					return { ...res };
+		const results = await Promise.all(
+			searchResults.map(async (res, idx: number) => {
+				if (idx < 3) {
+					try {
+						const pageContent = await this.webSearchService?.fetchPageContent(
+							res.url,
+						);
+						return {
+							...res,
+							content: pageContent?.cleanText,
+						};
+					} catch (_error) {
+						return { ...res };
+					}
 				}
-			}
-			return { ...res };
-		}));
+				return { ...res };
+			}),
+		);
 
 		return results;
 	}

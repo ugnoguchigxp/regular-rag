@@ -26,11 +26,30 @@ export interface LlmResponse {
 	};
 }
 
+export interface ChatDelta {
+	id: string;
+	delta: string;
+	finishReason?: string;
+}
+
 /**
  * Embedding プロバイダーインターフェース
  */
 export interface EmbeddingProvider {
 	createEmbedding(input: string): Promise<number[]>;
+}
+
+export interface StreamingLlmProvider extends LlmProvider {
+	streamChatCompletion(
+		messages: ChatMessage[],
+		options?: LlmCompletionOptions,
+	): AsyncIterable<ChatDelta>;
+}
+
+export function supportsStreaming(
+	provider: LlmProvider,
+): provider is StreamingLlmProvider {
+	return "streamChatCompletion" in provider;
 }
 
 /**

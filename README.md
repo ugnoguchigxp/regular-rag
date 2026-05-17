@@ -1,289 +1,173 @@
 # regular-rag
 
-PostgreSQL (`pgvector` + 全文検索 + Knowledge Graph) を使った **フレームワーク非依存** の RAG バックエンドパッケージです。  
-Hono / Express / Next.js / NestJS 等、任意のフレームワークから利用できます。
+Hono 専用の Artifact RAG アプリです。  
+`wiki/pages/**/*.md` を取り込み、ハイブリッド検索（pgvector + 全文）で根拠付き回答を返します。
 
-## 特徴
+## 構成
 
-- 🚀 **フレームワーク非依存**: コアロジックが分離されており、Node.js 環境であればどこでも動作します。
-- 🧠 **ハイブリッド検索**: `pgvector` によるベクトル検索と、PostgreSQL 標準の全文検索 (`tsvector`) を組み合わせた高精度な検索。
-- 🌐 **Web検索フォールバック**:
-  - ユーザーが `Web検索` / `Webで検索` などを明示した場合は、ローカルRAG検索よりWeb検索を優先。
-  - ローカルRAG（全文検索+ベクトル検索）でヒットしない場合は、見つからなかった旨を伝えつつWeb検索結果で補完。
-- 🕸️ **Knowledge Graph 連携**: エンティティ抽出とグラフ探索により、単純な類似度検索では届かないコンテキストを補完。
-- 🛡️ **堅牢な設計**:
-  - **セキュリティ**: SQLインジェクション（LIKEメタキャラクタ）対策、入力値バリデーション。
-  - **信頼性**: Zod による LLM 出力の構造検証、DB接続失敗時の適切なリソース解放。
-  - **型安全**: TypeScript による完全な型定義、`any` 型の排除。
-- 🔌 **柔軟な接続管理**: 独自に DB 接続を持つことも、既存の `pg.Pool` / `pg.Client` (Prisma等) を使い回すことも可能。
+- Backend: Hono (`/api/**`)
+- Frontend: React + Vite
+- DB: PostgreSQL + pgvector + pg_trgm
+- LLM / Embedding: Azure OpenAI
 
-## アーキテクチャ
+## 前提
 
-```
-┌─────────────────────────────────────────────────────┐
-│  regular-rag パッケージ                               │
-│                                                     │
-│  ┌──────────┐   ┌────────────────────────────────┐  │
-│  │ RagEngine│──▶│ ChatbotService                 │  │
-│  │ (facade) │   │  ├── LlmProvider (interface)   │  │
-│  │          │   │  ├── EmbeddingProvider (if)     │  │
-│  │          │   │  ├── RagRepository             │  │
-│  │          │   │  │    ├── pgvector search       │  │
-│  │          │   │  │    └── 全文検索 (tsvector)     │  │
-│  │          │   │  ├── CacheRepository           │  │
-│  │          │   │  └── KnowledgeGraphService      │  │
-│  │          │   │       └── KnowledgeGraphRepository │  │
-│  └──────────┘   └────────────────────────────────┘  │
-│                                                     │
-│  Providers (差し替え可能):                             │
-│    └── AzureOpenAiProvider (LLM + Embedding)        │
-│                                                     │
-│  DB: Drizzle ORM (内部のみ使用, 外部pgクライアント受入可) │
-└─────────────────────────────────────────────────────┘
-        ▲           ▲            ▲            ▲
-     Hono        Express      Next.js      NestJS
-```
+- Bun
+- PostgreSQL（`vector` と `pg_trgm` が有効化できること）
+- Azure OpenAI の API キー（チャット/埋め込みを使う場合）
 
 ## セットアップ
 
-```sh
+```bash
 bun install
 cp .env.example .env
 ```
 
-`.env` の `DATABASE_URL` と Azure OpenAI 系の値を設定してください。
+`.env` を編集し、最低限次を設定します。
 
-## npm パッケージとして利用する
+- `DATABASE_URL`
+- `REGULAR_RAG_CONTENT_ROOT`（既定: `../wiki-knowledge`）
+- Azure OpenAI の各環境変数
 
-- Node.js: `>= 18`
-- インストール:
+PostgreSQL をローカル起動する場合:
 
-```sh
-npm install regular-rag
+```bash
+docker compose up -d db
 ```
 
-## クイックスタート
+## 起動
 
-### 基本的な使い方
+開発:
 
-```typescript
-import { RagEngine, AzureOpenAiProvider } from 'regular-rag';
-
-// Provider を準備
-const provider = new AzureOpenAiProvider({
-  endpoint: 'https://YOUR_RESOURCE.openai.azure.com',
-  apiKey: 'YOUR_API_KEY',
-  deployment: 'gpt-4o-mini',
-  embeddingsDeployment: 'text-embedding-3-small',
-});
-
-// RagEngine を起動
-const engine = await RagEngine.create({
-  databaseUrl: 'postgres://...',
-  llmProvider: provider,
-  embeddingProvider: provider,
-});
-
-// クエリ実行
-const result = await engine.query([
-  { role: 'user', content: '糖尿病の食事療法について教えてください' }
-]);
-console.log(result.content);
-```
-
-### 既存の pg.Pool と共存（Prisma 等との競合回避）
-
-```typescript
-import { Pool } from 'pg';
-import { RagEngine, AzureOpenAiProvider } from 'regular-rag';
-
-const pool = new Pool({ connectionString: 'postgres://...' });
-const provider = AzureOpenAiProvider.fromEnv();
-
-const engine = await RagEngine.create({
-  pgClient: pool,        // 外部の接続を渡す（close責任はホスト側）
-  llmProvider: provider,
-  embeddingProvider: provider,
-});
-```
-
-### フレームワーク別の利用例
-
-<details>
-<summary>Hono</summary>
-
-```typescript
-import { Hono } from 'hono';
-import { RagEngine, AzureOpenAiProvider, readEnv } from 'regular-rag';
-
-const env = readEnv();
-const provider = AzureOpenAiProvider.fromEnv();
-const engine = await RagEngine.create({
-  databaseUrl: env.databaseUrl,
-  llmProvider: provider,
-  embeddingProvider: provider,
-});
-
-const app = new Hono();
-app.post('/api/rag', async (c) => {
-  const { messages } = await c.req.json();
-  const result = await engine.query(messages);
-  return c.json(result);
-});
-
-export default { port: env.port, fetch: app.fetch };
-```
-
-</details>
-
-<details>
-<summary>Express</summary>
-
-```typescript
-import express from 'express';
-import { RagEngine, AzureOpenAiProvider } from 'regular-rag';
-
-const provider = AzureOpenAiProvider.fromEnv();
-const engine = await RagEngine.create({
-  databaseUrl: process.env.DATABASE_URL!,
-  llmProvider: provider,
-  embeddingProvider: provider,
-});
-
-const app = express();
-app.use(express.json());
-app.post('/api/rag', async (req, res) => {
-  const result = await engine.query(req.body.messages);
-  res.json(result);
-});
-
-app.listen(3000);
-```
-
-</details>
-
-<details>
-<summary>Next.js (App Router)</summary>
-
-```typescript
-// app/api/rag/route.ts
-import { RagEngine, AzureOpenAiProvider } from 'regular-rag';
-
-const provider = AzureOpenAiProvider.fromEnv();
-const engine = await RagEngine.create({
-  databaseUrl: process.env.DATABASE_URL!,
-  llmProvider: provider,
-  embeddingProvider: provider,
-});
-
-export async function POST(request: Request) {
-  const { messages } = await request.json();
-  const result = await engine.query(messages);
-  return Response.json(result);
-}
-```
-
-</details>
-
-<details>
-<summary>NestJS</summary>
-
-```typescript
-// rag.module.ts
-import { Module } from '@nestjs/common';
-import { RagEngine, AzureOpenAiProvider } from 'regular-rag';
-
-@Module({
-  providers: [
-    {
-      provide: 'RAG_ENGINE',
-      useFactory: async () => {
-        const provider = AzureOpenAiProvider.fromEnv();
-        return RagEngine.create({
-          databaseUrl: process.env.DATABASE_URL!,
-          llmProvider: provider,
-          embeddingProvider: provider,
-        });
-      },
-    },
-  ],
-  exports: ['RAG_ENGINE'],
-})
-export class RagModule {}
-
-// rag.controller.ts
-import { Controller, Post, Body, Inject } from '@nestjs/common';
-import type { RagEngine, ChatMessage } from 'regular-rag';
-
-@Controller('api/rag')
-export class RagController {
-  constructor(@Inject('RAG_ENGINE') private engine: RagEngine) {}
-
-  @Post()
-  async query(@Body() body: { messages: ChatMessage[] }) {
-    return this.engine.query(body.messages);
-  }
-}
-```
-
-</details>
-
-## デモアプリの起動
-
-```sh
+```bash
 bun run dev
 ```
 
-`http://localhost:3000` でチャットUIが起動します。
+- UI: [http://localhost:5173](http://localhost:5173)
+- API: `http://localhost:5173/api/*`
 
-## Drizzle マイグレーション
+本番相当サーバー:
 
-```sh
-bunx drizzle-kit generate
-bunx drizzle-kit migrate
+```bash
+bun run start
 ```
 
-## テーブル構成
+## マイグレーション
 
-| テーブル | 用途 |
-|---------|------|
-| `rag_documents` | ドキュメント本体 + embedding (pgvector) + 全文検索 (tsvector) |
-| `chatbot_cache` | LLM応答キャッシュ |
-| `knowledge_nodes` | Knowledge Graph ノード |
-| `knowledge_edges` | Knowledge Graph エッジ |
-
-## ディレクトリ構成
-
+```bash
+bun run db:migrate
 ```
-regular-rag/
-├── src/
-│   ├── index.ts             # パッケージ公開API
-│   ├── core/
-│   │   └── RagEngine.ts     # メインファサード
-│   ├── providers/
-│   │   ├── types.ts          # LlmProvider / EmbeddingProvider interface
-│   │   └── AzureOpenAiProvider.ts
-│   ├── services/
-│   │   ├── ChatbotService.ts
-│   │   ├── KnowledgeGraphService.ts
-│   │   └── GraphExtractor.ts
-│   ├── repositories/
-│   │   ├── RagRepository.ts  # pgvector + 全文検索
-│   │   ├── CacheRepository.ts
-│   │   └── KnowledgeGraphRepository.ts
-│   ├── db/
-│   │   ├── index.ts          # DB接続（外部pgクライアント対応）
-│   │   └── schema.ts         # Drizzle テーブル定義
-│   ├── config/
-│   │   └── readEnv.ts
-│   └── types/
-│       └── llm.ts
-├── examples/
-│   ├── index.ts              # エントリポイント
-│   ├── app.ts                # Hono アプリ定義
-│   └── views/
-│       └── chat.html         # チャットUI
-├── data/                     # サンプルデータ
-├── drizzle.config.ts
-└── package.json
+
+`db:migrate` は `drizzle/*.sql` を順に適用します（適用履歴は `regular_rag_schema_migrations`）。
+初回は `drizzle/0001_sources_chat_artifacts.sql` が適用され、以下を作成します。
+
+- `sources`
+- `source_fragments`
+- `conversations`
+- `messages`
+- `artifacts`
+- `retrieval_logs`
+
+## Markdown 取り込み
+
+```bash
+bun run import:markdown
+```
+
+取り込み元:
+
+- `${REGULAR_RAG_CONTENT_ROOT}/pages/**/*.md`
+
+補助ディレクトリ:
+
+- `${REGULAR_RAG_CONTENT_ROOT}/wiki/`（UI/メタ用途）
+
+## API 概要
+
+### Health
+
+- `GET /api/health`
+- `GET /api/sources/health`
+
+### Sources
+
+- `GET /api/sources/tree`
+- `GET /api/sources/search?q=...`
+- `POST /api/sources/reindex`
+- `GET /api/sources/pages/*`
+- `POST /api/sources/pages`
+- `PUT /api/sources/pages/*`
+- `DELETE /api/sources/pages/*`
+- `GET /api/sources/folders`
+- `POST /api/sources/folders`
+- `PUT /api/sources/folders/*`
+- `DELETE /api/sources/folders/*`
+- `GET /api/sources/history/*`
+- `GET /api/sources/diff/*?from=...&to=...`
+
+### Chat / Retrieval
+
+- `POST /api/chat`
+- `POST /api/chat/stream`
+- `GET /api/chat/conversations`
+- `GET /api/chat/conversations/:conversationId/messages`
+- `GET /api/chat/conversations/:conversationId/retrieval-logs`
+- `POST /api/search`
+
+### Artifacts
+
+- `GET /api/artifacts`
+- `GET /api/artifacts/:artifactId`
+- `PUT /api/artifacts/:artifactId`
+
+## Artifact 形式
+
+LLM 出力内の次形式を抽出して保存します。
+
+```xml
+<artifact type="markdown" title="...">
+...
+</artifact>
+```
+
+対応 type:
+
+- `markdown`
+- `table`
+- `mermaid`
+- `chart`
+- `json`
+- `code`
+- `diagram-dsl`
+
+## 品質ゲート
+
+```bash
+bun run verify
+```
+
+実行内容:
+
+- `typecheck`
+- `lint`
+- `format:check`
+- `test`
+- `build`
+
+## 主要ディレクトリ
+
+```txt
+src/
+  app/                    # Hono app runtime / server
+  routes/                 # API routes
+  modules/
+    sources/              # wiki content repo / markdown importer / source repository
+    rag/                  # retriever (RRF merge)
+    chat/                 # chat service
+    artifacts/            # artifact extraction / parsing
+  db/                     # drizzle schema / db connection
+web/
+  src/                    # React UI
+drizzle/
+  0001_sources_chat_artifacts.sql
 ```

@@ -1,10 +1,14 @@
-import type { Config } from 'drizzle-kit';
+import type { Config } from "drizzle-kit";
+
+const databaseUrl =
+	process.env.DATABASE_URL ??
+	"postgres://postgres:postgres@localhost:5432/regular_rag";
 
 export default {
-    schema: './src/db/schema.ts',
-    out: './drizzle',
-    dialect: 'postgresql',
-    dbCredentials: {
-        url: process.env.DATABASE_URL!,
-    },
+	schema: "./src/db/schema.ts",
+	out: "./drizzle",
+	dialect: "postgresql",
+	dbCredentials: {
+		url: databaseUrl,
+	},
 } satisfies Config;

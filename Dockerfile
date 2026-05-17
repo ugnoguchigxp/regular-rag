@@ -4,15 +4,15 @@ FROM postgres:17-alpine
 RUN apk add --no-cache --virtual .build-deps \
     git \
     build-base \
-    clang \
-    llvm-dev
+    clang19 \
+    llvm19-dev
 
 # Clone and build pgvector
 RUN cd /tmp && \
     git clone --branch v0.8.0 https://github.com/pgvector/pgvector.git && \
     cd pgvector && \
-    make && \
-    make install && \
+    make NO_BC=1 && \
+    make NO_BC=1 install && \
     cd .. && \
     rm -rf pgvector
 
