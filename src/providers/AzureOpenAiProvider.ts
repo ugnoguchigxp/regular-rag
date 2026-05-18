@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { APP_CONFIG_DEFAULTS } from "../config/appDefaults";
+import { AGENTIC_SEARCH_DEFAULTS } from "../modules/agentic-search/constants";
 import { AzureChatResponseSchema, type ChatMessage } from "../types/llm";
 
 import type {
@@ -35,7 +37,8 @@ export class AzureOpenAiProvider implements LlmProvider, EmbeddingProvider {
 		this.deployment = config.deployment;
 		this.embeddingsDeployment =
 			config.embeddingsDeployment ?? config.deployment;
-		this.apiVersion = config.apiVersion ?? "2024-06-01";
+		this.apiVersion =
+			config.apiVersion ?? APP_CONFIG_DEFAULTS.azureOpenAiApiVersion;
 	}
 
 	/**
@@ -44,11 +47,12 @@ export class AzureOpenAiProvider implements LlmProvider, EmbeddingProvider {
 	static fromEnv(env: NodeJS.ProcessEnv = process.env): AzureOpenAiProvider {
 		const endpoint = env.AZURE_OPENAI_ENDPOINT;
 		const apiKey = env.AZURE_OPENAI_API_KEY;
-		const deployment = env.AZURE_OPENAI_DEPLOYMENT;
+		const deployment =
+			env.AZURE_OPENAI_DEPLOYMENT?.trim() || AGENTIC_SEARCH_DEFAULTS.model;
 
-		if (!endpoint || !apiKey || !deployment) {
+		if (!endpoint || !apiKey) {
 			throw new Error(
-				"AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY, AZURE_OPENAI_DEPLOYMENT are required",
+				"AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY are required",
 			);
 		}
 
@@ -56,8 +60,10 @@ export class AzureOpenAiProvider implements LlmProvider, EmbeddingProvider {
 			endpoint,
 			apiKey,
 			deployment,
-			embeddingsDeployment: env.AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT,
-			apiVersion: env.AZURE_OPENAI_API_VERSION,
+			embeddingsDeployment:
+				env.AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT ||
+				APP_CONFIG_DEFAULTS.azureOpenAiEmbeddingsDeployment,
+			apiVersion: APP_CONFIG_DEFAULTS.azureOpenAiApiVersion,
 		});
 	}
 

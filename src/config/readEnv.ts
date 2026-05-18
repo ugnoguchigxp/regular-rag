@@ -1,23 +1,13 @@
-const DEFAULT_PORT = 3000;
+import { APP_CONFIG_DEFAULTS } from "./appDefaults";
 
 export type EnvConfig = {
 	port: number;
 	databaseUrl: string;
 };
 
-export function readEnv(env: NodeJS.ProcessEnv = process.env): EnvConfig {
-	const databaseUrl = env.DATABASE_URL;
-	if (!databaseUrl) {
-		throw new Error("DATABASE_URL is required");
-	}
-
-	const port = Number(env.PORT ?? DEFAULT_PORT);
-	if (!Number.isFinite(port) || port <= 0) {
-		throw new Error("PORT must be a positive number");
-	}
-
+export function readEnv(_env: NodeJS.ProcessEnv = process.env): EnvConfig {
 	return {
-		port,
-		databaseUrl,
+		port: APP_CONFIG_DEFAULTS.port,
+		databaseUrl: APP_CONFIG_DEFAULTS.databaseUrl,
 	};
 }

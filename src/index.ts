@@ -1,6 +1,8 @@
 // Core
 
 // Config
+export * from "./app/env";
+export * from "./config/appDefaults";
 export * from "./config/readEnv";
 export * from "./core/RagEngine";
 // Database
@@ -9,6 +11,7 @@ export * from "./db/schema";
 export * from "./providers/AzureOpenAiProvider";
 export * from "./providers/BraveSearchProvider";
 export * from "./providers/ExaSearchProvider";
+export * from "./providers/azureOpenAiProviderFactory";
 // Providers
 export * from "./providers/types";
 export * from "./providers/webSearchProviderFactory";

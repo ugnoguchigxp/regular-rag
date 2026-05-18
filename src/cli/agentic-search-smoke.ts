@@ -10,7 +10,7 @@ import { SearchEvidenceCollector } from "../modules/rag/search-evidence";
 import { SettingsRepository } from "../modules/settings/settings.repository";
 import { SourceRepository } from "../modules/sources/source.repository";
 import { readPage } from "../modules/sources/wiki/content-repo";
-import { AzureOpenAiProvider } from "../providers/AzureOpenAiProvider";
+import { createAzureOpenAiProviderFromAppEnv } from "../providers/azureOpenAiProviderFactory";
 import type { EmbeddingProvider } from "../providers/types";
 import { createConfiguredWebSearchProvider } from "../providers/webSearchProviderFactory";
 
@@ -134,34 +134,20 @@ function evaluateResult(result: AgenticSearchResult): SmokeCheck[] {
 	return checks;
 }
 
-async function runEmbeddingCheck(): Promise<SmokeCheck> {
-	if (
-		!process.env.AZURE_OPENAI_ENDPOINT ||
-		!process.env.AZURE_OPENAI_API_KEY ||
-		!process.env.AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT
-	) {
+async function runEmbeddingCheck(
+	env: ReturnType<typeof readAppEnv>,
+): Promise<SmokeCheck> {
+	if (!env.azureOpenAiEndpoint || !env.azureOpenAiApiKey) {
 		return {
 			name: "embedding-api",
 			ok: true,
 			message:
-				"skipped (AZURE_OPENAI_ENDPOINT / AZURE_OPENAI_API_KEY / AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT not fully configured)",
+				"skipped (AZURE_OPENAI_ENDPOINT / AZURE_OPENAI_API_KEY not fully configured)",
 		};
 	}
 
 	try {
-		const endpoint = process.env.AZURE_OPENAI_ENDPOINT;
-		const apiKey = process.env.AZURE_OPENAI_API_KEY;
-		const embeddingsDeployment = process.env.AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT;
-		if (!endpoint || !apiKey || !embeddingsDeployment) {
-			throw new Error("Embedding smoke prerequisites are not configured.");
-		}
-		const provider = new AzureOpenAiProvider({
-			endpoint,
-			apiKey,
-			deployment: process.env.AZURE_OPENAI_DEPLOYMENT ?? embeddingsDeployment,
-			embeddingsDeployment,
-			apiVersion: process.env.AZURE_OPENAI_API_VERSION,
-		});
+		const provider = createAzureOpenAiProviderFromAppEnv(env);
 		const embedding = await provider.createEmbedding(
 			"agentic smoke embedding check",
 		);
@@ -299,7 +285,7 @@ async function runAgenticCheck(
 	try {
 		let embeddingProvider: EmbeddingProvider;
 		try {
-			embeddingProvider = AzureOpenAiProvider.fromEnv();
+			embeddingProvider = createAzureOpenAiProviderFromAppEnv(env);
 		} catch (error) {
 			embeddingProvider = new UnconfiguredEmbeddingProvider(
 				error instanceof Error
@@ -402,11 +388,10 @@ async function main() {
 		apiVersion: env.openAiApiVersion ?? null,
 		model: env.openAiAgenticSearchModel,
 		hasOpenAiApiKey: Boolean(env.openAiApiKey),
-		hasAzureApiKey: Boolean(process.env.AZURE_OPENAI_API_KEY),
-		azureEndpoint: process.env.AZURE_OPENAI_ENDPOINT ?? null,
-		azureDeployment: process.env.AZURE_OPENAI_DEPLOYMENT ?? null,
-		embeddingsDeployment:
-			process.env.AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT ?? null,
+		hasAzureApiKey: Boolean(env.azureOpenAiApiKey),
+		azureEndpoint: env.azureOpenAiEndpoint ?? null,
+		azureDeployment: env.azureOpenAiDeployment,
+		embeddingsDeployment: env.azureOpenAiEmbeddingsDeployment,
 		webSearchProviderMode: env.webSearchProviderMode,
 		hasExaApiKey: Boolean(env.exaApiKey),
 		hasBraveSearchApiKey: Boolean(env.braveSearchApiKey),
@@ -414,7 +399,7 @@ async function main() {
 	};
 
 	const checks: SmokeCheck[] = [];
-	const embeddingCheck = await runEmbeddingCheck();
+	const embeddingCheck = await runEmbeddingCheck(env);
 	checks.push(embeddingCheck);
 
 	const responses = await runResponsesCheck(env);

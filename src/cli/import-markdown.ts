@@ -5,7 +5,7 @@ import {
 	ensureContentRoot,
 	ensureGitRepo,
 } from "../modules/sources/wiki/content-repo";
-import { AzureOpenAiProvider } from "../providers/AzureOpenAiProvider";
+import { createAzureOpenAiProviderFromAppEnv } from "../providers/azureOpenAiProviderFactory";
 import type { EmbeddingProvider } from "../providers/types";
 import { readAppEnv } from "../app/env";
 
@@ -28,7 +28,7 @@ async function main() {
 
 		let embeddingProvider: EmbeddingProvider;
 		try {
-			embeddingProvider = AzureOpenAiProvider.fromEnv();
+			embeddingProvider = createAzureOpenAiProviderFromAppEnv(env);
 		} catch (error) {
 			embeddingProvider = new UnconfiguredEmbeddingProvider(
 				error instanceof Error

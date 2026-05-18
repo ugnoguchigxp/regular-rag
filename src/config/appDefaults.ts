@@ -1,0 +1,18 @@
+export const APP_CONFIG_DEFAULTS = {
+	nodeEnv: "development",
+	port: 5173,
+	databaseUrl: "postgres://postgres:postgres@localhost:5432/regular_rag",
+	contentRoot: "./wiki-knowledge",
+	webSearchProviderMode: "auto",
+	exaSearchBaseUrl: "https://api.exa.ai",
+	azureOpenAiApiVersion: "2024-06-01",
+	azureOpenAiEmbeddingsDeployment: "text-embedding-3-small",
+	jwtSecret: "regular-rag-dev-jwt-secret-change-this-for-production",
+	jwtAccessExpiresIn: "15m",
+	jwtRefreshExpiresIn: "7d",
+	appUrl: "http://localhost:5173",
+	corsOrigins: ["http://localhost:5173"],
+	trustProxy: false,
+	cookieSameSite: "lax",
+	openAiApiVersion: undefined as string | undefined,
+} as const;

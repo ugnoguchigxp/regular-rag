@@ -12,7 +12,7 @@ import {
 	ensureContentRoot,
 	ensureGitRepo,
 } from "../modules/sources/wiki/content-repo";
-import { AzureOpenAiProvider } from "../providers/AzureOpenAiProvider";
+import { createAzureOpenAiProviderFromAppEnv } from "../providers/azureOpenAiProviderFactory";
 import type { EmbeddingProvider } from "../providers/types";
 
 type IndexPhase = "fts" | "embed" | "all";
@@ -360,7 +360,7 @@ async function main() {
 	let provider: EmbeddingProvider;
 	let providerError: string | null = null;
 	try {
-		provider = AzureOpenAiProvider.fromEnv();
+		provider = createAzureOpenAiProviderFromAppEnv(env);
 	} catch (error) {
 		providerError =
 			error instanceof Error

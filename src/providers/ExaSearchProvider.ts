@@ -1,4 +1,5 @@
 import { HttpError, fetchJson } from "../utils/httpClient";
+import { APP_CONFIG_DEFAULTS } from "../config/appDefaults";
 import type {
 	WebSearchOptions,
 	WebSearchProvider,
@@ -43,10 +44,9 @@ export class ExaSearchProvider implements WebSearchProvider {
 		}
 
 		this.apiKey = trimmedApiKey;
-		this.baseUrl = (options.baseUrl ?? "https://api.exa.ai").replace(
-			/\/+$/,
-			"",
-		);
+		this.baseUrl = (
+			options.baseUrl ?? APP_CONFIG_DEFAULTS.exaSearchBaseUrl
+		).replace(/\/+$/, "");
 		this.timeout = options.timeout ?? 10000;
 	}
 
@@ -55,9 +55,7 @@ export class ExaSearchProvider implements WebSearchProvider {
 		if (!apiKey) {
 			throw new Error("EXA_API_KEY environment variable is not set");
 		}
-		return new ExaSearchProvider(apiKey, {
-			baseUrl: process.env.EXA_SEARCH_BASE_URL,
-		});
+		return new ExaSearchProvider(apiKey);
 	}
 
 	async search(options: WebSearchOptions): Promise<WebSearchResult[]> {

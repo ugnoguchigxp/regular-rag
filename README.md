@@ -4,37 +4,86 @@
 [![Hono](https://img.shields.io/badge/Hono-%23E36022.svg?style=for-the-badge&logo=hono&logoColor=white)](https://hono.dev/)
 [![React](https://img.shields.io/badge/React-%2320232a.svg?style=for-the-badge&logo=react&logoColor=%2361DAFB)](https://react.dev/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-%23316192.svg?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-%23007ACC.svg?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![MIT License](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE.md)
 
-Hono (Backend) + React & Vite (Frontend) で構築された、**ローカル Markdown 知識ベース専用のエンタープライズグレード RAG (Retrieval-Augmented Generation) プラットフォーム**です。  
-独自のハイブリッド検索（pgvector + PostgreSQL 全文検索）と、OpenAI/Azure OpenAI の **Responses API を用いた自律的エージェント検索 (Agentic Search)** を備え、Claude風の **Artifact 自動抽出エンジン** や **堅牢なロールベースユーザー管理 (RBAC)** を完備しています。
+**Hono (Backend) + React & Vite (Frontend)** で構築された、ローカル Markdown 知識ベース専用の **エンタープライズグレード RAG (Retrieval-Augmented Generation) プラットフォーム**です。
+
+pgvector + PostgreSQL 全文検索によるハイブリッド検索、OpenAI / Azure OpenAI の **Responses API を用いた自律エージェント検索 (Agentic Search)**、Claude 風の **Artifact 自動抽出エンジン**、そして **堅牢なロールベースユーザー管理 (RBAC)** を完備しています。
+
+---
+
+## 📋 目次
+
+1. [主な機能](#-主な機能-key-features)
+2. [システムアーキテクチャ](#-システムアーキテクチャ-architecture)
+3. [ディレクトリ構造](#-ディレクトリ構造)
+4. [前提条件](#-前提条件-prerequisites)
+5. [セットアップ & インストール](#-セットアップ--インストール-installation)
+6. [クイックスタート](#-クイックスタート-quick-start)
+7. [環境変数リファレンス](#-環境変数リファレンス)
+8. [CLI コマンドリファレンス](#-cli-コマンドリファレンス)
+9. [API エンドポイント](#-api-エンドポイント)
+10. [知識ベースの構成ルール](#-知識ベースの構成ルール)
+11. [開発ガイド](#-開発ガイド)
+12. [本番デプロイ](#-本番デプロイ)
+13. [貢献方法](#-貢献方法-contributing)
+14. [ライセンス](#-ライセンス)
 
 ---
 
 ## 🌟 主な機能 (Key Features)
 
 ### 1. 🔍 ハイブリッド・セマンティック検索 (RRF Hybrid Search)
-* **セマンティック検索**: `pgvector` を用いた高精度な多次元ベクトル近傍探索。
-* **高速全文検索**: PostgreSQL の `pg_trgm` と FTS (Full-Text Search) を利用した日本語対応トークナイズド探索。
-* **RRF (Reciprocal Rank Fusion)**: ベクトルスコアとテキストスコアを自動で重み付け融合し、最適な順位で知識断片（Fragments）をマージ・抽出します。
 
-### 2. 🤖 自律的エージェント検索 (Agentic Search)
-OpenAI / Azure OpenAI の `function tools` や `Responses API` を用いた、LLM自身が能動的に情報収拾と検証を行うアドバンスド検索モードです。以下のツールを状況に応じて自律的に呼び出します。
-* `full_text_search` / `vector_search`: ナレッジベースのインデックス検索。
-* `wiki_read`: チャンク断片（Fragment）だけでなく、オリジナルのWikiドキュメント本文をまるごと動的に読み直して文脈を検証。
-* `web_search`: ローカルナレッジにない時事問題や外部知識を補うため、**Exa Search** や **Brave Search** を用いてWeb検索。
-* `fetch`: Web検索結果のURLからHTMLをフェッチし、`cheerio` を用いて不要タグ（広告・ナビゲーション等）を除去・最適化したクリーンな本文テキストを抽出してコンテキストに挿入。
+ベクトル検索と全文検索を組み合わせた高精度な知識検索エンジンです。
 
-### 3. 💎 Claude風 Artifacts エンジン
-生成AIの出力に含まれるコードやデータ構造をリアルタイムで検知し、右側の専用パネルに美しいカードビューとして自動抽出・バージョン管理します。
-* **サポート形式**: `markdown`, `table`, `mermaid` (ダイアグラム自動描画), `chart`, `json`, `code`, `diagram-dsl`。
+| 検索方式 | 技術 | 説明 |
+| :--- | :--- | :--- |
+| セマンティック検索 | `pgvector` | 多次元ベクトル近傍探索（HNSW インデックス） |
+| 全文検索 | `pg_trgm` + FTS | 日本語対応トークナイズド探索 |
+| スコア融合 | RRF | Reciprocal Rank Fusion で両スコアを最適重み付け融合 |
 
-### 4. 🔒 堅牢なロールベースユーザー管理 (RBAC & Auth)
-セルフサインアップを意図的に排除し、クローズドな知識共有に適した強固な認証システムを実装しています。
-* **暗号化アルゴリズム**: `scrypt` による安全なパスワードハッシュ。
-* **セッション管理**: `jose` ライブラリを用いた、JWT Access/Refresh Tokens の httpOnly Cookie 管理。
-* **安全な設計**: Refresh Token の SHA-256 ハッシュ化DB保存、およびワンタイム利用によるローテーション。
-* **通信セキュリティ**: CORS許可オリジン制御 / CSRF保護 / Secure Headers / レート制限を標準適用。
-* **管理者機能**: `admin` ロール専用のユーザー追加・無効化（`isActive` の制御）・パスワードリセットが可能な「管理者管理パネル」を内蔵。
+### 2. 🤖 自律エージェント検索 (Agentic Search)
+
+OpenAI / Azure OpenAI の `Responses API` を用いた、LLM が能動的に情報収集・検証を行う高度な検索モードです。エージェントは以下のツールを状況に応じて自律的に呼び出します。
+
+| ツール | 説明 |
+| :--- | :--- |
+| `full_text_search` | ナレッジベース全文インデックスの検索 |
+| `vector_search` | ベクトル近傍探索 |
+| `wiki_read` | 元の Wiki ドキュメント本文を丸ごと動的に読み直して文脈を検証 |
+| `web_search` | **Exa Search** / **Brave Search** を用いたリアルタイム Web 検索 |
+| `fetch` | Web ページの HTML を `cheerio` でパース・クリーニングしてコンテキスト挿入 |
+
+### 3. 💎 Claude 風 Artifacts エンジン
+
+生成 AI の出力に含まれるコードやデータ構造をリアルタイムで検知し、専用パネルに自動抽出・バージョン管理します。
+
+**サポート形式**: `markdown` / `table` / `mermaid` / `chart` / `json` / `code` / `diagram-dsl`
+
+### 4. 🔒 ロールベースユーザー管理 (RBAC & Auth)
+
+セルフサインアップを意図的に排除した、クローズドな知識共有向けの堅牢な認証システムです。
+
+| 機能 | 実装 |
+| :--- | :--- |
+| パスワードハッシュ | `scrypt` |
+| セッション管理 | `jose` による JWT Access / Refresh Token（httpOnly Cookie） |
+| Refresh Token | SHA-256 ハッシュ化 DB 保存 + ワンタイムローテーション |
+| 通信セキュリティ | CORS 制御 / CSRF 保護 / Secure Headers / レート制限 |
+| 管理者機能 | ユーザー追加・無効化・パスワードリセット（Admin パネル内蔵） |
+
+### 5. 📝 Markdown 知識ベース管理
+
+- **WYSIWYG エディタ**: Web UI からドキュメントを直接編集・保存
+- **自動インデックス化**: Markdown ファイルの FTS インデックス生成と Embedding ベクトルの一括計算
+- **カテゴリ管理**: ディレクトリ構造をそのままカテゴリとして認識
+
+### 6. 🧠 ユーザー設定・システムコンテキスト
+
+- LLM の動作をコントロールするシステムプロンプトをユーザー単位で永続化
+- チャット履歴の保存・取得・削除
 
 ---
 
@@ -42,203 +91,416 @@ OpenAI / Azure OpenAI の `function tools` や `Responses API` を用いた、LL
 
 ```mermaid
 graph TD
-    subgraph Frontend (React + Vite)
-        UI[App.tsx] -->|React Router / UI Components| Tabs[Knowledge | Chat | Search | Admin]
-        UI -->|API Client| API[api.ts]
+    subgraph Frontend["Frontend - React + Vite"]
+        UI[App.tsx] -->|React Router| Tabs[Knowledge / Chat / Search / Admin]
+        UI -->|API Client| APITS[api.ts]
     end
 
-    subgraph Backend (Hono + Bun)
-        API -->|HTTP Requests| Hono[app/server.ts]
-        Hono -->|Secure Auth Middleware| Auth[modules/auth]
+    subgraph Backend["Backend - Hono + Bun"]
+        APITS -->|HTTP Requests| Hono[app/server.ts]
+        Hono -->|Auth Middleware| Auth[modules/auth]
         Hono -->|API Routes| Routes[routes/*]
-        
-        subgraph Services & Logic
+
+        subgraph Logic["Services & Logic"]
             Routes -->|RAG Operations| Rag[modules/rag]
             Routes -->|Chat Completion| Chat[modules/chat]
             Routes -->|Agentic Loop| Agent[modules/agentic-search]
+            Routes -->|Wiki CRUD| Sources[modules/sources]
         end
     end
 
-    subgraph Database & AI
+    subgraph DataLayer["Database & AI"]
         Rag -->|Hybrid Retriever / RRF| DB[(PostgreSQL + pgvector)]
         Chat -->|Context Construction| DB
-        Agent -->|Tool Execution| Tools[Registry: Search, Wiki, Web, Fetch]
+        Agent -->|Tool Execution| Tools[Registry: Search / Wiki / Web / Fetch]
         Tools -->|Vector Search| DB
         Tools -->|Web Search| Exa[Exa / Brave API]
         Tools -->|Fetch Page| Cheerio[cheerio DOM Parser]
-        
         Agent -->|Responses API| LLM[OpenAI / Azure OpenAI]
     end
+```
+
+### 技術スタック
+
+| レイヤー | 技術 |
+| :--- | :--- |
+| ランタイム | Bun |
+| バックエンド | Hono v4 |
+| フロントエンド | React 19 + Vite 8 |
+| DB / ORM | PostgreSQL 17 + pgvector + Drizzle ORM |
+| 認証 | jose (JWT) + scrypt |
+| スタイル | Tailwind CSS v4 + Vanilla CSS |
+| ルーティング (FE) | TanStack Router |
+| データフェッチ (FE) | TanStack Query |
+| Linter / Formatter | Biome |
+| テスト | Vitest |
+
+---
+
+## 📁 ディレクトリ構造
+
+```text
+regular-rag/
+├── src/                        # バックエンドソースコード
+│   ├── app/                    # Hono アプリのブートストラップ・サーバー設定
+│   ├── cli/                    # CLI ツール群（管理者作成・DB マイグレーション等）
+│   ├── config/                 # 設定・定数管理
+│   ├── core/                   # コア共通ロジック
+│   ├── db/                     # Drizzle スキーマ・マイグレーション・DB 接続
+│   ├── middleware/              # JWT 認証・管理者検証ミドルウェア
+│   ├── modules/
+│   │   ├── agentic-search/     # エージェントループ・MCP 互換ツールレジストリ
+│   │   ├── artifacts/          # <artifact> XML 抽出・解析エンジン
+│   │   ├── auth/               # 認証ロジック・パスワードハッシュ (scrypt)
+│   │   ├── chat/               # チャットサービス・RAG メッセージ管理
+│   │   ├── rag/                # ハイブリッドリトリーバー (RRF マージ)
+│   │   ├── settings/           # ユーザー設定・システムコンテキストの永続化
+│   │   └── sources/            # Wiki 記事解析・Slug 生成・インポータ
+│   ├── providers/              # LLM プロバイダ (OpenAI / Azure OpenAI) アダプター
+│   ├── repositories/           # DB アクセス層
+│   ├── routes/                 # API ルート定義
+│   ├── services/               # ドメインサービス
+│   ├── types/                  # 共通型定義
+│   └── utils/                  # ユーティリティ関数
+│
+├── web/                        # フロントエンドソースコード
+│   └── src/
+│       ├── domains/
+│       │   ├── auth/           # ログイン・認証状態管理
+│       │   ├── chat/           # チャット UI・Artifact パネル
+│       │   ├── knowledge/      # 知識ベース閲覧コンポーネント
+│       │   └── search/         # 検索結果表示コンポーネント
+│       ├── admin-user-management.tsx  # 管理者ユーザー管理パネル
+│       ├── knowledge-workspace.tsx    # Wiki 閲覧・編集ワークスペース
+│       ├── api.ts              # バックエンド API クライアント
+│       ├── App.tsx             # アプリケーションルート・認証ラッパー
+│       └── styles.css          # グローバルスタイル (Tailwind CSS v4)
+│
+├── docs/                       # 設計ドキュメント・実装計画
+├── drizzle/                    # DB マイグレーションファイル
+├── wiki-knowledge/             # Markdown 知識ベース格納ディレクトリ
+├── Dockerfile                  # pgvector 付き PostgreSQL イメージ
+├── docker-compose.yml          # ローカル DB 環境
+├── biome.json                  # Biome (Linter/Formatter) 設定
+├── drizzle.config.ts           # Drizzle ORM 設定
+├── tsup.config.ts              # サーバービルド設定
+├── vite.config.ts              # フロントエンド + Dev Server 設定
+└── vitest.config.ts            # テスト設定
 ```
 
 ---
 
 ## 🛠️ 前提条件 (Prerequisites)
 
-* **Bun** (>= 1.0)
-* **PostgreSQL** (with `vector` and `pg_trgm` extensions enabled)
-* **AI API Credentials**:
-  * **Azure OpenAI** or **OpenAI** API Key
-  * **Exa Search** or **Brave Search** API Key (Web検索機能用)
+| ツール | バージョン | 備考 |
+| :--- | :--- | :--- |
+| [Bun](https://bun.sh/) | >= 1.0 | ランタイム・パッケージマネージャ |
+| [Docker](https://www.docker.com/) | 任意 | ローカル PostgreSQL 環境用 |
+| PostgreSQL | >= 17 | `vector` / `pg_trgm` 拡張が必要 |
+| OpenAI or Azure OpenAI | — | Chat / Embedding / Agentic Search 用 API キー |
+| Exa or Brave Search | — | Web 検索機能用（任意） |
 
 ---
 
 ## 📦 セットアップ & インストール (Installation)
 
 ### 1. 依存関係のインストール
+
 ```bash
 bun install
 ```
 
 ### 2. 環境変数の設定
-`.env.example` をコピーして `.env` を作成し、必要なパラメータを設定します。
+
 ```bash
 cp .env.example .env
 ```
 
-| 変数名 | 説明 | 既定値 / 例 |
-| :--- | :--- | :--- |
-| `DATABASE_URL` | PostgreSQL 接続文字列 | `postgres://user:pass@localhost:5432/regular_rag` |
-| `REGULAR_RAG_CONTENT_ROOT` | Markdown知識ベースの格納ルートディレクトリ | `../wiki-knowledge` |
-| `JWT_SECRET` | JWTアクセストークン署名用のシークレット | (ランダムな文字列を設定) |
-| `COOKIE_SAME_SITE` | 認証Cookieの `SameSite` 属性 | `lax` (`none` の場合は HTTPS 必須) |
-| `APP_URL` | 公開アプリURL (HTTPS 判定・Cookie secure 判定に利用) | `http://localhost:5173` |
-| `CORS_ORIGIN` | API を許可する Origin (`,` 区切り) | `http://localhost:5173` |
-| `TRUST_PROXY` | `x-forwarded-for` 等のプロキシヘッダを信頼するか | `false` |
-| `WEB_SEARCH_PROVIDER` | Web検索プロバイダ名 | `exa` または `brave` |
-| `EXA_API_KEY` | Exa Web Search API キー | (Exaを利用する場合設定) |
-| `BRAVE_SEARCH_API_KEY` | Brave Search API キー | (Braveを利用する場合設定) |
-| `AZURE_OPENAI_API_KEY` | Azure OpenAI の API キー | (Azure OpenAI利用時) |
-| `AZURE_OPENAI_ENDPOINT` | Azure OpenAI の エンドポイント URL | `https://xxxx.openai.azure.com/` |
-| `AZURE_OPENAI_DEPLOYMENT` | チャット/エージェント用デプロイ名 | `gpt-5-4-mini` 等 |
-| `OPENAI_API_KEY` | OpenAI 直利用時の API キー | (OpenAI直利用時) |
+`.env` を開き、必要なパラメータを設定してください（詳細は[環境変数リファレンス](#-環境変数リファレンス)を参照）。
 
-### 3. PostgreSQL のローカル起動 (Docker)
-ローカルで Docker を用いてベクトル対応の PostgreSQL を立ち上げる場合は、以下を実行します。
+### 3. PostgreSQL の起動 (Docker)
+
+pgvector 拡張入りの PostgreSQL をローカルで起動します。
+
 ```bash
 docker compose up -d db
 ```
 
+> **Note**: Docker を使わず既存の PostgreSQL を利用する場合は、`vector` と `pg_trgm` 拡張を手動で有効化してください。
+
 ### 4. データベース・マイグレーション
-Drizzle ORM を使ってテーブルを作成し、`vector` / `pg_trgm` エクステンションを有効化します。
+
+Drizzle ORM でテーブルを作成し、拡張機能を有効化します。
+
 ```bash
 bun run db:migrate
 ```
 
-### 5. 初期管理者（Admin）のアカウント作成
-セルフサインアップが無効化されているため、初回のみ CLI を用いて管理ユーザーを作成します。
+### 5. 初期管理者アカウントの作成
+
+セルフサインアップが無効化されているため、初回のみ CLI から管理ユーザーを作成します。
+
 ```bash
-bun run auth:create-admin -- --email admin@example.com --name Admin
+bun run auth:create-admin -- --email admin@example.com --name "Admin User"
 ```
-*(実行時に対話形式でパスワードの入力が求められます)*
+
+> 実行時に対話形式でパスワードの入力が求められます。
 
 ---
 
 ## 🚀 クイックスタート (Quick Start)
 
-### 1. 開発用サーバーの起動
-フロントエンド (Vite) と バックエンド (Hono) を同時に統合した開発サーバーを起動します。
+### 開発用サーバーの起動
+
+フロントエンド (Vite) とバックエンド (Hono) を統合した開発サーバーを起動します。
+
 ```bash
 bun run dev
 ```
-* **UI アプリケーション**: [http://localhost:5173](http://localhost:5173)
-* **API エンドポイント**: `http://localhost:5173/api/*`
 
-### 2. 知識ベース (Markdown) のインデックス化
-RAGの対象とするドキュメント（`pages/<category>/**/*.md`）を読み込み、FTSインデックスの作成と Embedding ベクトルの自動計算（バックフィル）を一括実行します。
+| エンドポイント | URL |
+| :--- | :--- |
+| Web UI | http://localhost:5173 |
+| API | http://localhost:5173/api/* |
+
+### 知識ベース (Markdown) のインデックス化
+
+`wiki-knowledge/pages/<category>/**/*.md` を読み込み、FTS インデックスの生成と Embedding ベクトルの計算を一括実行します。
+
 ```bash
+# FTS + Embedding を一括実行（推奨）
 bun run wiki:index:all
+
+# FTS インデックスのみ
+bun run wiki:index:fts
+
+# Embedding のみ（FTS 済みドキュメントに対してバックフィル）
+bun run wiki:index:embed
 ```
 
-### 3. Agentic Search 疎通テスト
-LLMの接続状態、Embeddingの作成能力、およびエージェントの自律応答フローに問題がないか確認できるスモークテスト用 CLI を備えています。
+### Agentic Search の疎通テスト
+
+LLM 接続・Embedding 生成・エージェント自律応答フローをまとめて検証するスモークテストです。
+
 ```bash
 bun run agentic:smoke
 ```
 
 ---
 
-## 📖 機能と仕様の詳細 (Deep Dive)
+## 🔧 環境変数リファレンス
 
-### 📂 Markdown 取り込みのカテゴリルール
-知識ベースは以下のルールに従って配置してください。
-* `pages/` 直下の第1階層フォルダがそのまま「カテゴリ」として認識されます。
-  * `pages/tech/hono.md` ➔ カテゴリは `tech`、slugは `tech/hono`
-  * `pages/finance/report.md` ➔ カテゴリは `finance`、slugは `finance/report`
-* `pages/` 直下への直接的な Markdown ファイル配置はエラーとなるため避けてください。
+非シークレットのアプリ設定は `src/config/appDefaults.ts` に集約しています。`.env` は API キー、JWT シークレット、LLM の endpoint/model だけを置く想定です。
 
-### ⚙️ 品質ゲート (Quality Gates)
-プロダクションリリースの品質を保証するため、以下のCIチェックを実行可能です。
+| 変数名 | 必須 | 説明 | デフォルト / 例 |
+| :--- | :---: | :--- | :--- |
+| **認証** | | | |
+| `JWT_SECRET` | ✅ | JWT 署名シークレット | ランダムな 32 文字以上の文字列 |
+| **Azure OpenAI** | | | |
+| `AZURE_OPENAI_ENDPOINT` | | Azure OpenAI エンドポイント URL | `https://xxx.openai.azure.com` |
+| `AZURE_OPENAI_API_KEY` | | Azure OpenAI API キー | |
+| `AZURE_OPENAI_DEPLOYMENT` | | Chat / Agentic Search 用デプロイ名 | `gpt-5-4-mini` |
+| `AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT` | | Embedding 用デプロイ名 | `text-embedding-3-small` |
+| **OpenAI 直接利用** | | | |
+| `OPENAI_API_KEY` | | OpenAI API キー（Azure 未設定時に使用） | |
+| `OPENAI_BASE_URL` | | OpenAI 互換 API のカスタムベース URL | 未設定時は `https://api.openai.com/v1` |
+| **Web 検索** | | | |
+| `EXA_API_KEY` | | Exa Search API キー | |
+| `BRAVE_SEARCH_API_KEY` | | Brave Search API キー | |
+
+---
+
+## 🖥️ CLI コマンドリファレンス
+
+```bash
+# 開発サーバー起動（フロントエンド + バックエンド統合）
+bun run dev
+
+# バックエンドのみ起動（本番モード）
+bun run start
+
+# 管理者アカウント作成
+bun run auth:create-admin -- --email <email> --name "<name>"
+
+# 知識ベースインデックス化
+bun run wiki:index:all         # FTS + Embedding 全フェーズ
+bun run wiki:index:fts         # FTS インデックスのみ
+bun run wiki:index:embed       # Embedding のみ（バックフィル）
+
+# Markdown インポート
+bun run import:markdown
+
+# 欠損 Slug の登録
+bun run wiki:register:missing-slugs
+
+# Agentic Search スモークテスト
+bun run agentic:smoke
+
+# DB マイグレーション
+bun run db:migrate             # Drizzle ベースのカスタムマイグレーション
+bun run db:generate            # マイグレーションファイルの生成
+bun run db:migrate:drizzle     # drizzle-kit による直接マイグレーション
+
+# 品質チェック（型チェック + Lint + Format + Test + Build）
+bun run verify
+
+# 個別チェック
+bun run typecheck              # TypeScript 型チェック
+bun run lint                   # Biome Linter
+bun run format                 # Biome フォーマッタ（自動修正）
+bun run format:check           # フォーマットチェック（修正なし）
+bun run test                   # Vitest テスト実行
+bun run test:watch             # Vitest ウォッチモード
+bun run test:coverage          # カバレッジレポート生成
+
+# ビルド
+bun run build                  # サーバー + フロントエンドをまとめてビルド
+bun run build:server           # tsup でサーバーのみビルド
+bun run build:web              # Vite でフロントエンドのみビルド
+```
+
+---
+
+## 📋 API エンドポイント
+
+### 🔐 認証 (Authentication)
+
+| Method | Path | 説明 |
+| :--- | :--- | :--- |
+| `POST` | `/api/auth/login` | ログイン（httpOnly Cookie にトークンをセット） |
+| `POST` | `/api/auth/refresh` | リフレッシュトークンのローテーション |
+| `POST` | `/api/auth/logout` | ログアウト（Cookie クリア） |
+| `GET` | `/api/auth/me` | 現在のログインユーザー情報取得 |
+
+### 👥 管理者機能 (Admin — 要 Admin 権限)
+
+| Method | Path | 説明 |
+| :--- | :--- | :--- |
+| `GET` | `/api/admin/users` | 登録ユーザー一覧取得 |
+| `POST` | `/api/admin/users` | 新規ユーザーの招待・作成 |
+| `PATCH` | `/api/admin/users/:userId` | ユーザー名・ロール更新 |
+| `POST` | `/api/admin/users/:userId/disable` | アカウントの有効化・無効化 |
+| `POST` | `/api/admin/users/:userId/reset-password` | パスワードの強制リセット |
+
+### 💬 チャット & 検索 (Chat & RAG Search)
+
+| Method | Path | 説明 |
+| :--- | :--- | :--- |
+| `POST` | `/api/chat` | RAG を活用した対話（履歴保存） |
+| `GET` | `/api/chat/conversations` | チャットセッション履歴取得 |
+| `DELETE` | `/api/chat/conversations/:conversationId` | 会話セッション削除 |
+| `POST` | `/api/search` | ハイブリッド検索（全文 vs ベクトルの比較結果） |
+| `POST` | `/api/agentic-search` | 自律エージェント型検索の実行 |
+
+### 📚 Wiki / 知識ベース
+
+| Method | Path | 説明 |
+| :--- | :--- | :--- |
+| `GET` | `/api/wiki` | ドキュメント一覧取得 |
+| `GET` | `/api/wiki/:slug` | ドキュメント詳細取得 |
+| `POST` | `/api/wiki` | ドキュメント新規作成 |
+| `PUT` | `/api/wiki/:slug` | ドキュメント更新 |
+| `DELETE` | `/api/wiki/:slug` | ドキュメント削除 |
+
+### ⚙️ 設定 (Settings)
+
+| Method | Path | 説明 |
+| :--- | :--- | :--- |
+| `GET` | `/api/settings` | ユーザー設定取得 |
+| `PUT` | `/api/settings` | ユーザー設定保存 |
+
+---
+
+## 📖 知識ベースの構成ルール
+
+知識ベースは `wiki-knowledge/pages/` 以下に Markdown ファイルを配置します。
+
+```text
+wiki-knowledge/
+└── pages/
+    ├── tech/
+    │   ├── hono.md          → slug: tech/hono       / カテゴリ: tech
+    │   └── react.md         → slug: tech/react      / カテゴリ: tech
+    └── finance/
+        └── report.md        → slug: finance/report  / カテゴリ: finance
+```
+
+> **重要**: `pages/` 直下に Markdown ファイルを直接配置することはできません。必ずカテゴリディレクトリ（第1階層のフォルダ）の下に配置してください。
+
+---
+
+## 🧑‍💻 開発ガイド
+
+### 品質ゲート (Quality Gates)
+
+PR や本番リリース前に以下を必ず実行してください。
+
 ```bash
 bun run verify
 ```
-これにより、以下のプロセスがシーケンシャルに検証されます。
-1. **型チェック**: `tsc --noEmit`
-2. **静的解析 (Biom Linter)**: `biome lint`
-3. **コードフォーマットチェック**: `biome format`
-4. **テストスイート実行 (Vitest)**: `vitest run`
-5. **プロダクションビルドテスト**: `tsup` & `vite build`
 
----
+このコマンドは以下を順番に実行します。
 
-## 📋 主要 API エンドポイント
+1. **型チェック** (`tsc --noEmit`)
+2. **静的解析** (`biome lint`)
+3. **フォーマットチェック** (`biome format`)
+4. **テストスイート** (`vitest run`)
+5. **プロダクションビルド** (`tsup` & `vite build`)
 
-### 🔐 認証 (Authentication)
-* `POST /api/auth/login` - ログイン (httpOnly Cookie にトークンをセット)
-* `POST /api/auth/refresh` - トークンのリフレッシュ・ローテーション
-* `POST /api/auth/logout` - ログアウト (Cookieクリア)
-* `GET /api/auth/me` - 現在ログインしているユーザー情報の取得
+### Drizzle ORM によるスキーマ変更
 
-### 👥 管理者機能 (Admin Users - 要 Admin 権限)
-* `GET /api/admin/users` - 登録ユーザー一覧の取得
-* `POST /api/admin/users` - 新規ユーザーの招待/作成
-* `PATCH /api/admin/users/:userId` - ユーザー名やロールの更新
-* `POST /api/admin/users/:userId/disable` - ユーザーのアカウント有効化/無効化
-* `POST /api/admin/users/:userId/reset-password` - パスワードの強制リセット
+```bash
+# スキーマ変更後にマイグレーションファイルを生成
+bun run db:generate
 
-### 💬 チャット & 検索 (Chat & RAG Search)
-* `POST /api/chat` - RAGを活用した対話 (履歴のユーザー保存)
-* `GET /api/chat/conversations` - チャットセッション履歴の取得
-* `DELETE /api/chat/conversations/:conversationId` - 会話セッションの削除
-* `POST /api/search` - 通常のハイブリッド検索結果（全文 vs ベクトル）の比較結果取得
-* `POST /api/agentic-search` - 自律的エージェント型検索の実行
-
----
-
-## 💎 プロジェクトのディレクトリ構造
-
-```txt
-src/
-  app/                    # Hono アプリのブートストラップ・サーバー設定
-  routes/                 # API ルート定義 (認証、検索、管理機能など)
-  middleware/             # JWT認証認証・管理者検証などのミドルウェア
-  db/                     # Drizzle スキーマ、マイグレーション、DB接続
-  modules/
-    auth/                 # 認証ロジック、パスワードハッシュ (scrypt)
-    settings/             # ユーザー設定・システムコンテキストの永続化
-    rag/                  # ハイブリッドリトリーバー (RRFマージ)
-    agentic-search/       # エージェントループ、MCP互換ツール、LLMアダプター
-    sources/              # Wiki記事の解析、Slug生成、インポータ
-    chat/                 # チャットサービス、RAGメッセージ管理
-    artifacts/            # <artifact> XML抽出と解析
-web/
-  src/
-    domains/              # 機能ドメイン別のコンポーネント (Chat, Search)
-    admin-user-management/# 管理者向けユーザー管理パネル UI
-    knowledge-workspace/  # 知識ベース (Wiki) の閲覧・編集ワークスペース
-    api.ts                # バックエンドAPIへの接続クライアント
-    App.tsx               # アプリケーションのメイン画面・認証ラッパー
-    styles.css            # プレミアムでモダンな Vanilla CSS デザイン
+# マイグレーションを実行
+bun run db:migrate
 ```
+
+### 新規 API エンドポイントの追加
+
+1. `src/routes/` に新しいルートファイルを追加
+2. `src/app/server.ts` でルートを登録
+3. `web/src/api.ts` にクライアント関数を追加
+
+---
+
+## 🐳 本番デプロイ
+
+### Docker を使用したデプロイ
+
+#### 1. DB のみ Docker で起動
+
+```bash
+docker compose up -d db
+```
+
+#### 2. 本番ビルド
+
+```bash
+bun run build
+```
+
+#### 3. サーバー起動
+
+```bash
+NODE_ENV=production bun run start
+```
+
+### 本番環境での注意事項
+
+- `JWT_SECRET` は必ずランダムな強力な文字列に変更してください
+- ポート、DB 接続先、CORS、Cookie、Web 検索プロバイダなどの共通設定は `src/config/appDefaults.ts` で管理します
 
 ---
 
 ## 🤝 貢献方法 (Contributing)
 
-1. リポジトリをフォークします。
-2. 機能追加やバグ修正を行い、ブランチを作成します。
-3. コードがフォーマットされ、テストが通ることを確認します (`bun run verify`)。
-4. プルリクエストを作成してください。
+1. リポジトリをフォークします
+2. 機能ブランチを作成します (`git checkout -b feature/amazing-feature`)
+3. 変更をコミットします (`git commit -m 'Add amazing feature'`)
+4. `bun run verify` ですべての品質チェックが通ることを確認します
+5. プルリクエストを作成してください
 
 ---
 

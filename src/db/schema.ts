@@ -174,17 +174,26 @@ export const sourceFragments = pgTable(
 	}),
 );
 
-export const conversations = pgTable("conversations", {
-	id: uuid("id").defaultRandom().primaryKey(),
-	title: text("title"),
-	metadata: jsonb("metadata").default({}).notNull(),
-	createdAt: timestamp("created_at", { withTimezone: true })
-		.defaultNow()
-		.notNull(),
-	updatedAt: timestamp("updated_at", { withTimezone: true })
-		.defaultNow()
-		.notNull(),
-});
+export const conversations = pgTable(
+	"conversations",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		userId: uuid("user_id").references(() => users.id, {
+			onDelete: "cascade",
+		}),
+		title: text("title"),
+		metadata: jsonb("metadata").default({}).notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => ({
+		userIdx: index("conversations_user_id_idx").on(table.userId),
+	}),
+);
 
 export const messages = pgTable(
 	"messages",

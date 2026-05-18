@@ -277,27 +277,4 @@ export class AuthService {
 			.where(eq(users.id, targetUserId));
 		await revokeAllRefreshTokensForUser(targetUserId, this.db);
 	}
-
-	async ensureBootstrapAdmin(): Promise<void> {
-		if (
-			!this.env.bootstrapAdminEmail ||
-			!this.env.bootstrapAdminPassword ||
-			!this.env.bootstrapAdminName
-		) {
-			return;
-		}
-
-		const [countRow] = await this.db
-			.select({ count: sql<number>`cast(count(*) as integer)` })
-			.from(users);
-		if ((countRow?.count ?? 0) > 0) {
-			return;
-		}
-
-		await this.createAdmin({
-			email: this.env.bootstrapAdminEmail,
-			password: this.env.bootstrapAdminPassword,
-			displayName: this.env.bootstrapAdminName,
-		});
-	}
 }

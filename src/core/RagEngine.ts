@@ -72,10 +72,11 @@ export interface RagResponse {
  *
  * @example
  * ```typescript
+ * const env = readAppEnv();
  * const engine = await RagEngine.create({
- *   databaseUrl: 'postgres://...',
- *   llmProvider: AzureOpenAiProvider.fromEnv(),
- *   embeddingProvider: AzureOpenAiProvider.fromEnv(),
+ *   databaseUrl: env.databaseUrl,
+ *   llmProvider: createAzureOpenAiProviderFromAppEnv(env),
+ *   embeddingProvider: createAzureOpenAiProviderFromAppEnv(env),
  * });
  *
  * // ドキュメント取り込み（Knowledge Graph 自動構築付き）

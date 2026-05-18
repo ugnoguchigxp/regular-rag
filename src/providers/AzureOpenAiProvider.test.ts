@@ -12,13 +12,12 @@ describe("AzureOpenAiProvider", () => {
 
 	it("fromEnv validates required variables", () => {
 		expect(() => AzureOpenAiProvider.fromEnv({})).toThrowError(
-			"AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY, AZURE_OPENAI_DEPLOYMENT are required",
+			"AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY are required",
 		);
 
 		const provider = AzureOpenAiProvider.fromEnv({
 			AZURE_OPENAI_ENDPOINT: "https://example.openai.azure.com/",
 			AZURE_OPENAI_API_KEY: "key",
-			AZURE_OPENAI_DEPLOYMENT: "gpt-4o",
 		});
 
 		expect(provider).toBeInstanceOf(AzureOpenAiProvider);

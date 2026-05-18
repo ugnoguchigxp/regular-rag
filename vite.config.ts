@@ -3,6 +3,7 @@ import devServer from "@hono/vite-dev-server";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, loadEnv } from "vite";
+import { APP_CONFIG_DEFAULTS } from "./src/config/appDefaults";
 
 export default defineConfig(({ mode }) => {
 	// Load env file from project root (one level up from 'web' root)
@@ -28,7 +29,7 @@ export default defineConfig(({ mode }) => {
 			},
 		},
 		server: {
-			port: 5173,
+			port: APP_CONFIG_DEFAULTS.port,
 		},
 		optimizeDeps: {
 			include: ["dayjs"],

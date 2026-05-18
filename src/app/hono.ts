@@ -22,7 +22,7 @@ import { SourceRepository } from "../modules/sources/source.repository";
 import { readPage } from "../modules/sources/wiki/content-repo";
 import { requireAdmin, requireAuth } from "../middleware/auth";
 import { rateLimiter } from "../middleware/rate-limiter";
-import { AzureOpenAiProvider } from "../providers/AzureOpenAiProvider";
+import { createAzureOpenAiProviderFromAppEnv } from "../providers/azureOpenAiProviderFactory";
 import type {
 	EmbeddingProvider,
 	LlmProvider,
@@ -147,7 +147,7 @@ async function createRuntime(): Promise<AppRuntime> {
 
 	let provider: LlmProvider & EmbeddingProvider;
 	try {
-		provider = AzureOpenAiProvider.fromEnv();
+		provider = createAzureOpenAiProviderFromAppEnv(env);
 	} catch (error) {
 		provider = new UnconfiguredProvider(
 			error instanceof Error
@@ -164,12 +164,11 @@ async function createRuntime(): Promise<AppRuntime> {
 		webSearchProvider: configuredWebSearch.provider,
 	});
 	const authService = new AuthService(dbConnection.db, env);
-	await authService.ensureBootstrapAdmin();
 	const settingsRepository = new SettingsRepository(dbConnection.db);
 
 	const agenticLogger = createAgenticLogger(env.openAiAgenticSearchDebug);
 	const agenticDisabledReason = !env.openAiApiKey
-		? "Agentic search requires OPENAI_API_KEY, or AZURE_OPENAI_API_KEY with AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_DEPLOYMENT."
+		? "Agentic search requires OPENAI_API_KEY, or AZURE_OPENAI_API_KEY with AZURE_OPENAI_ENDPOINT."
 		: env.openAiCredentialSource === "azure" && !env.openAiBaseUrl
 			? "AZURE_OPENAI_ENDPOINT (or OPENAI_BASE_URL) is required when using AZURE_OPENAI_API_KEY for Agentic search."
 			: null;

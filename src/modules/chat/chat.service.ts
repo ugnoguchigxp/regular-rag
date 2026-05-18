@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type * as schema from "../../db/schema";
 import {
@@ -8,6 +8,7 @@ import {
 	messages as messageTable,
 	retrievalLogs,
 } from "../../db/schema";
+import { HttpError } from "../auth/errors";
 import type { LlmProvider } from "../../providers/types";
 import type { ChatMessage } from "../../types/llm";
 import { extractArtifactsFromText } from "../artifacts/extract";
@@ -42,6 +43,7 @@ type ChatServiceDeps = {
 
 type ChatRequest = {
 	messages: ChatMessage[];
+	userId: string;
 	conversationId?: string;
 	topK?: number;
 	category?: string;
@@ -122,20 +124,30 @@ function conversationTitleFromQuery(query: string): string {
 export class ChatService {
 	constructor(private readonly deps: ChatServiceDeps) {}
 
+	private async findOwnedConversation(
+		conversationId: string,
+		userId: string,
+	): Promise<{ id: string } | null> {
+		const existing = await this.deps.db.query.conversations.findFirst({
+			where: and(
+				eq(conversations.id, conversationId),
+				eq(conversations.userId, userId),
+			),
+			columns: { id: true },
+		});
+		return existing ?? null;
+	}
+
 	private async ensureConversation(
 		conversationId: string | undefined,
+		userId: string,
 		query: string,
 	): Promise<string> {
-		if (conversationId) {
-			const existing = await this.deps.db.query.conversations.findFirst({
-				where: eq(conversations.id, conversationId),
-				columns: { id: true },
-			});
-			if (existing) return existing.id;
-		}
+		if (conversationId) return conversationId;
 		const [inserted] = await this.deps.db
 			.insert(conversations)
 			.values({
+				userId,
 				title: conversationTitleFromQuery(query),
 				metadata: {},
 			})
@@ -169,6 +181,15 @@ export class ChatService {
 		const lastUserMessage =
 			[...request.messages].reverse().find((message) => message.role === "user")
 				?.content ?? "";
+		if (
+			request.conversationId &&
+			!(await this.findOwnedConversation(
+				request.conversationId,
+				request.userId,
+			))
+		) {
+			throw new HttpError(404, "Conversation not found.");
+		}
 		const topK = request.topK ?? 8;
 		const category = request.category?.trim() || undefined;
 		const decision = await this.decideSearch(request.messages);
@@ -204,6 +225,7 @@ export class ChatService {
 
 		const conversationId = await this.ensureConversation(
 			request.conversationId,
+			request.userId,
 			lastUserMessage,
 		);
 
