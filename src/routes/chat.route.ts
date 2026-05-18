@@ -151,6 +151,22 @@ export function createChatRoute(deps: ChatRouteDeps) {
 				return c.json({ items: rows });
 			},
 		)
+		.delete("/conversations/:conversationId", async (c) => {
+			const conversationId = c.req.param("conversationId");
+			const existingConversation = await deps.db.query.conversations.findFirst({
+				where: eq(conversations.id, conversationId),
+				columns: { id: true },
+			});
+			if (!existingConversation) {
+				return c.json({ message: "Conversation not found" }, 404);
+			}
+
+			await deps.db
+				.delete(conversations)
+				.where(eq(conversations.id, conversationId));
+
+			return c.json({ ok: true });
+		})
 		.post("/", zValidator("json", ChatRequestSchema), async (c) => {
 			const body = c.req.valid("json");
 			const result = await service.run({

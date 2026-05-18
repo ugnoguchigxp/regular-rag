@@ -51,4 +51,41 @@ describe("readAppEnv", () => {
 		expect(env.exaSearchBaseUrl).toBe("https://api.exa.ai");
 		expect(env.braveSearchApiKey).toBeUndefined();
 	});
+
+	it("parses CORS origin allow-list and trust proxy", () => {
+		const env = readAppEnv({
+			CORS_ORIGIN: "http://localhost:5173, https://app.example.com ",
+			TRUST_PROXY: "true",
+		});
+		expect(env.corsOrigins).toEqual([
+			"http://localhost:5173",
+			"https://app.example.com",
+		]);
+		expect(env.trustProxy).toBe(true);
+	});
+
+	it("rejects wildcard CORS origin", () => {
+		expect(() => readAppEnv({ CORS_ORIGIN: "*" })).toThrow(
+			"Invalid CORS_ORIGIN",
+		);
+	});
+
+	it("rejects SameSite none without secure cookie condition", () => {
+		expect(() =>
+			readAppEnv({
+				COOKIE_SAME_SITE: "none",
+				NODE_ENV: "development",
+				APP_URL: "http://localhost:5173",
+			}),
+		).toThrow("COOKIE_SAME_SITE=none requires secure cookies");
+	});
+
+	it("allows SameSite none with HTTPS APP_URL", () => {
+		const env = readAppEnv({
+			COOKIE_SAME_SITE: "none",
+			APP_URL: "https://app.example.com",
+		});
+		expect(env.secureCookie).toBe(true);
+		expect(env.cookieSameSite).toBe("none");
+	});
 });

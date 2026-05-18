@@ -3,6 +3,9 @@ import { z } from "zod";
 import { AGENTIC_SEARCH_DEFAULTS } from "../modules/agentic-search/constants";
 
 const EnvSchema = z.object({
+	NODE_ENV: z
+		.enum(["development", "test", "production"])
+		.default("development"),
 	PORT: z.coerce.number().int().positive().default(5173),
 	DATABASE_URL: z
 		.string()
@@ -20,9 +23,26 @@ const EnvSchema = z.object({
 	AZURE_OPENAI_API_KEY: z.string().optional(),
 	AZURE_OPENAI_DEPLOYMENT: z.string().optional(),
 	AZURE_OPENAI_API_VERSION: z.string().trim().min(1).optional(),
+	JWT_SECRET: z
+		.string()
+		.min(32)
+		.default("regular-rag-dev-jwt-secret-change-this-for-production"),
+	JWT_ACCESS_EXPIRES_IN: z.string().trim().min(1).default("15m"),
+	JWT_REFRESH_EXPIRES_IN: z.string().trim().min(1).default("7d"),
+	COOKIE_SAME_SITE: z.enum(["lax", "strict", "none"]).default("lax"),
+	APP_URL: z.string().url().optional(),
+	CORS_ORIGIN: z.string().default("http://localhost:5173"),
+	TRUST_PROXY: z
+		.enum(["true", "false"])
+		.default("false")
+		.transform((value) => value === "true"),
+	REGULAR_RAG_BOOTSTRAP_ADMIN_EMAIL: z.string().trim().email().optional(),
+	REGULAR_RAG_BOOTSTRAP_ADMIN_PASSWORD: z.string().trim().min(8).optional(),
+	REGULAR_RAG_BOOTSTRAP_ADMIN_NAME: z.string().trim().min(1).optional(),
 });
 
 export type AppEnv = {
+	nodeEnv: "development" | "test" | "production";
 	port: number;
 	databaseUrl: string;
 	contentRoot: string;
@@ -39,6 +59,17 @@ export type AppEnv = {
 	openAiAgenticSearchMaxToolCalls: number;
 	openAiAgenticSearchMaxFetchCalls: number;
 	openAiAgenticSearchMaxContextChars: number;
+	jwtSecret: string;
+	jwtAccessExpiresIn: string;
+	jwtRefreshExpiresIn: string;
+	appUrl?: string;
+	corsOrigins: string[];
+	trustProxy: boolean;
+	secureCookie: boolean;
+	cookieSameSite: "lax" | "strict" | "none";
+	bootstrapAdminEmail?: string;
+	bootstrapAdminPassword?: string;
+	bootstrapAdminName?: string;
 };
 
 function optionalTrimmed(input?: string): string | undefined {
@@ -98,6 +129,24 @@ function toAzureCompatibleBaseUrl(endpoint?: string): string | undefined {
 
 export function readAppEnv(env: NodeJS.ProcessEnv = process.env): AppEnv {
 	const parsed = EnvSchema.parse(env);
+	const corsOrigins = parsed.CORS_ORIGIN.split(",")
+		.map((origin) => origin.trim())
+		.filter((origin) => origin.length > 0);
+	if (corsOrigins.length === 0 || corsOrigins.includes("*")) {
+		throw new Error(
+			"Invalid CORS_ORIGIN: wildcard (*) is not allowed. Use explicit origins.",
+		);
+	}
+	const appUrl = optionalTrimmed(parsed.APP_URL);
+	const secureCookie =
+		parsed.NODE_ENV === "production" ||
+		Boolean(appUrl?.toLowerCase().startsWith("https://"));
+	if (parsed.COOKIE_SAME_SITE === "none" && !secureCookie) {
+		throw new Error(
+			"COOKIE_SAME_SITE=none requires secure cookies. Use HTTPS APP_URL or NODE_ENV=production.",
+		);
+	}
+
 	const openAiCredentialSource = parsed.OPENAI_API_KEY?.trim()
 		? "openai"
 		: parsed.AZURE_OPENAI_API_KEY?.trim()
@@ -113,6 +162,7 @@ export function readAppEnv(env: NodeJS.ProcessEnv = process.env): AppEnv {
 		parsed.AZURE_OPENAI_DEPLOYMENT?.trim() || AGENTIC_SEARCH_DEFAULTS.model;
 
 	return {
+		nodeEnv: parsed.NODE_ENV,
 		port: parsed.PORT,
 		databaseUrl: parsed.DATABASE_URL,
 		contentRoot: path.resolve(process.cwd(), parsed.REGULAR_RAG_CONTENT_ROOT),
@@ -129,5 +179,19 @@ export function readAppEnv(env: NodeJS.ProcessEnv = process.env): AppEnv {
 		openAiAgenticSearchMaxToolCalls: AGENTIC_SEARCH_DEFAULTS.maxToolCalls,
 		openAiAgenticSearchMaxFetchCalls: AGENTIC_SEARCH_DEFAULTS.maxFetchCalls,
 		openAiAgenticSearchMaxContextChars: AGENTIC_SEARCH_DEFAULTS.maxContextChars,
+		jwtSecret: parsed.JWT_SECRET,
+		jwtAccessExpiresIn: parsed.JWT_ACCESS_EXPIRES_IN,
+		jwtRefreshExpiresIn: parsed.JWT_REFRESH_EXPIRES_IN,
+		appUrl,
+		corsOrigins,
+		trustProxy: parsed.TRUST_PROXY,
+		secureCookie,
+		cookieSameSite: parsed.COOKIE_SAME_SITE,
+		bootstrapAdminEmail:
+			optionalTrimmed(parsed.REGULAR_RAG_BOOTSTRAP_ADMIN_EMAIL) || undefined,
+		bootstrapAdminPassword:
+			optionalTrimmed(parsed.REGULAR_RAG_BOOTSTRAP_ADMIN_PASSWORD) || undefined,
+		bootstrapAdminName:
+			optionalTrimmed(parsed.REGULAR_RAG_BOOTSTRAP_ADMIN_NAME) || undefined,
 	};
 }

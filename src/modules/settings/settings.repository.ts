@@ -66,15 +66,40 @@ export class SettingsRepository {
 		return await this.ensureGlobalRecord();
 	}
 
+	async getSystemContextForUser(userId: string): Promise<SystemContextRecord> {
+		const normalizedUserId = userId.trim();
+		if (!normalizedUserId) {
+			return this.ensureGlobalRecord();
+		}
+		if (normalizedUserId === GLOBAL_SYSTEM_CONTEXT_KEY) {
+			return this.ensureGlobalRecord();
+		}
+		const userRecord = await this.db.query.userSettings.findFirst({
+			where: eq(userSettings.userId, normalizedUserId),
+		});
+		if (userRecord) {
+			return userRecord;
+		}
+		return this.ensureGlobalRecord();
+	}
+
 	async updateSystemContext(
 		systemContext: string,
+		userId?: string,
 	): Promise<SystemContextRecord> {
-		await this.ensureGlobalRecord();
+		const normalizedUserId = userId?.trim();
+		const targetUserId =
+			normalizedUserId && normalizedUserId !== GLOBAL_SYSTEM_CONTEXT_KEY
+				? normalizedUserId
+				: GLOBAL_SYSTEM_CONTEXT_KEY;
+		if (targetUserId === GLOBAL_SYSTEM_CONTEXT_KEY) {
+			await this.ensureGlobalRecord();
+		}
 		const now = new Date();
 		const [updated] = await this.db
 			.insert(userSettings)
 			.values({
-				userId: GLOBAL_SYSTEM_CONTEXT_KEY,
+				userId: targetUserId,
 				systemContext,
 				updatedAt: now,
 			})

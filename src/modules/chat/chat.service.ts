@@ -55,6 +55,7 @@ function buildSystemPrompt(localContext: string, webContext: string): string {
 		"If web snippets are weaker than local context, do not force them into the answer.",
 		"Cite uncertain points conservatively.",
 		'If you generate structured output, use <artifact type="..."> blocks.',
+		"Avoid overusing Markdown headings (like #, ##, ###). Instead, use a balanced mix of paragraphs, bullet points, and bold text to make the answer clear and readable.",
 		`Local markdown context:\n${localContext}`,
 		`Web search context:\n${webContext}`,
 	].join("\n\n");
@@ -108,6 +109,7 @@ function buildDirectAnswerPrompt(): string {
 		"Answer directly in Markdown without using retrieved context.",
 		"If the user asks for current, local workspace, or source-grounded facts that require search, say that search is required instead of guessing.",
 		'If you generate structured output, use <artifact type="..."> blocks.',
+		"Avoid overusing Markdown headings (like #, ##, ###). Instead, use a balanced mix of paragraphs, bullet points, and bold text to make the answer clear and readable.",
 	].join("\n");
 }
 

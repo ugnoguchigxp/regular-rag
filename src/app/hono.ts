@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { serveStatic } from "@hono/node-server/serve-static";
+import { csrf } from "hono/csrf";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
+import { secureHeaders } from "hono/secure-headers";
 import type { DbConnection } from "../db";
 import { createDbConnection } from "../db";
 import { SourceRetriever } from "../modules/rag/retriever";
@@ -12,10 +14,14 @@ import { OpenAiResponsesAdapter } from "../modules/agentic-search/llm/openai-res
 import { AgenticSearchRunner } from "../modules/agentic-search/runner";
 import { AgenticToolRegistry } from "../modules/agentic-search/tools/registry";
 import type { AgenticSearchResult } from "../modules/agentic-search/types";
+import { AuthService } from "../modules/auth/auth.service";
+import { HttpError } from "../modules/auth/errors";
 import { SearchEvidenceCollector } from "../modules/rag/search-evidence";
 import { SettingsRepository } from "../modules/settings/settings.repository";
 import { SourceRepository } from "../modules/sources/source.repository";
 import { readPage } from "../modules/sources/wiki/content-repo";
+import { requireAdmin, requireAuth } from "../middleware/auth";
+import { rateLimiter } from "../middleware/rate-limiter";
 import { AzureOpenAiProvider } from "../providers/AzureOpenAiProvider";
 import type {
 	EmbeddingProvider,
@@ -23,8 +29,10 @@ import type {
 	WebSearchProvider,
 } from "../providers/types";
 import { createConfiguredWebSearchProvider } from "../providers/webSearchProviderFactory";
+import { createAdminUsersRoute } from "../routes/admin-users.route";
 import { createAgenticSearchRoute } from "../routes/agentic-search.route";
 import { createArtifactsRoute } from "../routes/artifacts.route";
+import { createAuthRoute } from "../routes/auth.route";
 import { createChatRoute } from "../routes/chat.route";
 import { createHealthRoute } from "../routes/health.route";
 import { createSearchRoute } from "../routes/search.route";
@@ -43,10 +51,12 @@ type AppRuntime = {
 	sourceRepository: SourceRepository;
 	retriever: SourceRetriever;
 	evidenceCollector: SearchEvidenceCollector;
+	authService: AuthService;
 	settingsRepository: SettingsRepository;
 	agenticSearchService: {
 		run(input: {
 			query: string;
+			userId: string;
 			topK: number;
 			category?: string;
 		}): Promise<AgenticSearchResult>;
@@ -116,8 +126,9 @@ function isRuntimeShape(value: unknown): value is AppRuntime {
 		Boolean(obj.sourceRepository) &&
 		Boolean(obj.retriever) &&
 		Boolean(obj.evidenceCollector) &&
+		Boolean(obj.authService) &&
 		Boolean(obj.settingsRepository) &&
-		typeof settingsRepo?.getSystemContext === "function" &&
+		typeof settingsRepo?.getSystemContextForUser === "function" &&
 		typeof settingsRepo?.updateSystemContext === "function" &&
 		Boolean(obj.agenticSearchService) &&
 		typeof agenticService?.run === "function"
@@ -152,6 +163,8 @@ async function createRuntime(): Promise<AppRuntime> {
 		retriever,
 		webSearchProvider: configuredWebSearch.provider,
 	});
+	const authService = new AuthService(dbConnection.db, env);
+	await authService.ensureBootstrapAdmin();
 	const settingsRepository = new SettingsRepository(dbConnection.db);
 
 	const agenticLogger = createAgenticLogger(env.openAiAgenticSearchDebug);
@@ -225,6 +238,7 @@ async function createRuntime(): Promise<AppRuntime> {
 		sourceRepository,
 		retriever,
 		evidenceCollector,
+		authService,
 		settingsRepository,
 		agenticSearchService,
 	};
@@ -271,7 +285,50 @@ const distWebRoot = path.resolve(process.cwd(), "dist-web");
 const distWebIndex = path.resolve(distWebRoot, "index.html");
 
 app.use("*", logger());
-app.use("/api/*", cors());
+app.use(
+	"*",
+	secureHeaders({
+		contentSecurityPolicy: undefined,
+	}),
+);
+app.use(
+	"/api/*",
+	cors({
+		origin: (origin) => {
+			if (!origin) return undefined;
+			if (runtime.env.corsOrigins.includes(origin)) return origin;
+			return null;
+		},
+		credentials: true,
+		allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+		allowHeaders: ["Content-Type", "Authorization"],
+	}),
+);
+app.use(
+	"/api/*",
+	rateLimiter({
+		windowMs: 60 * 1000,
+		limit: 200,
+		trustProxy: runtime.env.trustProxy,
+	}),
+);
+app.use(
+	"/api/auth/login",
+	rateLimiter({
+		windowMs: 60 * 1000,
+		limit: 10,
+		trustProxy: runtime.env.trustProxy,
+	}),
+);
+app.use(
+	"/api/auth/refresh",
+	rateLimiter({
+		windowMs: 60 * 1000,
+		limit: 20,
+		trustProxy: runtime.env.trustProxy,
+	}),
+);
+app.use("/api/*", csrf());
 app.onError((error, c) => {
 	console.error(error);
 	const dbError = error as { code?: string; message?: string };
@@ -288,15 +345,138 @@ app.onError((error, c) => {
 			500,
 		);
 	}
+	if (error instanceof HttpError) {
+		return c.json(
+			{ message: error.message },
+			error.status as 400 | 401 | 403 | 404 | 409 | 500,
+		);
+	}
+	if (error instanceof Error && error.message === "Unauthorized") {
+		return c.json({ message: "Unauthorized" }, 401);
+	}
+	if (error instanceof Error && error.message === "Forbidden") {
+		return c.json({ message: "Forbidden" }, 403);
+	}
+	const message =
+		runtime.env.nodeEnv === "production"
+			? "Internal server error"
+			: error instanceof Error
+				? error.message
+				: "Internal server error";
 	return c.json(
 		{
-			message: error instanceof Error ? error.message : "Internal server error",
+			message,
 		},
 		500,
 	);
 });
 
 app.route("/api/health", createHealthRoute());
+app.use(
+	"/api/auth/me",
+	requireAuth({
+		env: runtime.env,
+		authService: runtime.authService,
+	}),
+);
+app.route(
+	"/api/auth",
+	createAuthRoute({
+		authService: runtime.authService,
+		env: runtime.env,
+	}),
+);
+app.use(
+	"/api/settings/*",
+	requireAuth({
+		env: runtime.env,
+		authService: runtime.authService,
+	}),
+);
+app.use(
+	"/api/settings",
+	requireAuth({
+		env: runtime.env,
+		authService: runtime.authService,
+	}),
+);
+app.use(
+	"/api/sources/*",
+	requireAuth({
+		env: runtime.env,
+		authService: runtime.authService,
+	}),
+);
+app.use(
+	"/api/search/*",
+	requireAuth({
+		env: runtime.env,
+		authService: runtime.authService,
+	}),
+);
+app.use(
+	"/api/search",
+	requireAuth({
+		env: runtime.env,
+		authService: runtime.authService,
+	}),
+);
+app.use(
+	"/api/agentic-search/*",
+	requireAuth({
+		env: runtime.env,
+		authService: runtime.authService,
+	}),
+);
+app.use(
+	"/api/agentic-search",
+	requireAuth({
+		env: runtime.env,
+		authService: runtime.authService,
+	}),
+);
+app.use(
+	"/api/chat/*",
+	requireAuth({
+		env: runtime.env,
+		authService: runtime.authService,
+	}),
+);
+app.use(
+	"/api/chat",
+	requireAuth({
+		env: runtime.env,
+		authService: runtime.authService,
+	}),
+);
+app.use(
+	"/api/artifacts/*",
+	requireAuth({
+		env: runtime.env,
+		authService: runtime.authService,
+	}),
+);
+app.use(
+	"/api/artifacts",
+	requireAuth({
+		env: runtime.env,
+		authService: runtime.authService,
+	}),
+);
+app.use(
+	"/api/admin/*",
+	requireAuth({
+		env: runtime.env,
+		authService: runtime.authService,
+	}),
+);
+app.use("/api/admin/*", requireAdmin());
+app.route(
+	"/api/admin",
+	createAdminUsersRoute({
+		authService: runtime.authService,
+	}),
+);
 app.route(
 	"/api/sources",
 	createSourcesRoute({

@@ -39,6 +39,20 @@ export type SystemContextResponse = {
 	updatedAt: string;
 };
 
+export type AuthUser = {
+	id: string;
+	email: string;
+	displayName: string;
+	role: "admin" | "member";
+};
+
+export type AdminUser = AuthUser & {
+	isActive: boolean;
+	lastLoginAt: string | null;
+	createdAt: string;
+	updatedAt: string;
+};
+
 export type SourceMutationResponse = {
 	ok: true;
 	slug?: string;
@@ -192,35 +206,117 @@ type RequestInitJson = Omit<RequestInit, "body"> & {
 	body?: unknown;
 };
 
+export const UNAUTHORIZED_EVENT_NAME = "regular-rag:unauthorized";
+
+let lastUnauthorizedEventAt = 0;
+
+const notifyUnauthorized = () => {
+	if (typeof window === "undefined") return;
+	const now = Date.now();
+	if (now - lastUnauthorizedEventAt < 500) return;
+	lastUnauthorizedEventAt = now;
+	window.dispatchEvent(new Event(UNAUTHORIZED_EVENT_NAME));
+};
+
+const isAuthPath = (path: string): boolean => path.startsWith("/api/auth/");
+
+const canRetryWithRefresh = (path: string): boolean =>
+	!isAuthPath(path) || path === "/api/auth/me";
+
+const shouldNotifyUnauthorized = (path: string): boolean =>
+	path !== "/api/auth/login";
+
+const parseErrorMessage = async (response: Response): Promise<string> => {
+	let message = `Request failed: ${response.status}`;
+	try {
+		const data = (await response.json()) as { message?: string };
+		if (data.message) {
+			message = data.message;
+		}
+	} catch {
+		// ignore parse errors for non-JSON responses
+	}
+	return message;
+};
+
 async function requestJson<T>(
 	path: string,
 	init?: RequestInitJson,
 ): Promise<T> {
-	const headers = new Headers(init?.headers);
-	if (init?.body !== undefined && !headers.has("Content-Type")) {
-		headers.set("Content-Type", "application/json");
+	const execute = async (): Promise<Response> => {
+		const headers = new Headers(init?.headers);
+		if (init?.body !== undefined && !headers.has("Content-Type")) {
+			headers.set("Content-Type", "application/json");
+		}
+
+		const { body, ...restInit } = init || {};
+		return fetch(path, {
+			...restInit,
+			headers,
+			credentials: "include",
+			body: body !== undefined ? JSON.stringify(body) : undefined,
+		});
+	};
+
+	let response = await execute();
+	if (response.status === 401 && canRetryWithRefresh(path)) {
+		const refreshResponse = await fetch("/api/auth/refresh", {
+			method: "POST",
+			credentials: "include",
+		});
+		if (refreshResponse.ok) {
+			response = await execute();
+		}
 	}
 
-	const { body, ...restInit } = init || {};
-
-	const response = await fetch(path, {
-		...restInit,
-		headers,
-		body: body !== undefined ? JSON.stringify(body) : undefined,
-	});
 	if (!response.ok) {
-		let message = `Request failed: ${response.status}`;
-		try {
-			const data = (await response.json()) as { message?: string };
-			if (data.message) {
-				message = data.message;
-			}
-		} catch {
-			// ignore parse errors for non-JSON responses
+		if (response.status === 401 && shouldNotifyUnauthorized(path)) {
+			notifyUnauthorized();
 		}
+		const message = await parseErrorMessage(response);
 		throw new Error(message);
 	}
 	return (await response.json()) as T;
+}
+
+async function requestVoid(
+	path: string,
+	init?: RequestInitJson,
+): Promise<void> {
+	const execute = async (): Promise<Response> => {
+		const headers = new Headers(init?.headers);
+		if (init?.body !== undefined && !headers.has("Content-Type")) {
+			headers.set("Content-Type", "application/json");
+		}
+
+		const { body, ...restInit } = init || {};
+
+		return fetch(path, {
+			...restInit,
+			headers,
+			credentials: "include",
+			body: body !== undefined ? JSON.stringify(body) : undefined,
+		});
+	};
+
+	let response = await execute();
+	if (response.status === 401 && canRetryWithRefresh(path)) {
+		const refreshResponse = await fetch("/api/auth/refresh", {
+			method: "POST",
+			credentials: "include",
+		});
+		if (refreshResponse.ok) {
+			response = await execute();
+		}
+	}
+
+	if (!response.ok) {
+		if (response.status === 401 && shouldNotifyUnauthorized(path)) {
+			notifyUnauthorized();
+		}
+		const message = await parseErrorMessage(response);
+		throw new Error(message);
+	}
 }
 
 const pageEndpoint = (slug: string): string =>
@@ -376,6 +472,15 @@ export async function fetchConversations(
 	return data.items;
 }
 
+export async function deleteConversation(
+	conversationId: string,
+): Promise<{ ok: true }> {
+	return requestJson<{ ok: true }>(
+		`/api/chat/conversations/${conversationId}`,
+		{ method: "DELETE" },
+	);
+}
+
 export async function fetchConversationMessages(
 	conversationId: string,
 ): Promise<ConversationMessage[]> {
@@ -443,5 +548,90 @@ export async function agenticSearch(params: {
 	return requestJson("/api/agentic-search", {
 		method: "POST",
 		body: params,
+	});
+}
+
+export async function login(params: {
+	email: string;
+	password: string;
+}): Promise<{ user: AuthUser }> {
+	return requestJson("/api/auth/login", {
+		method: "POST",
+		body: params,
+	});
+}
+
+export async function logout(): Promise<void> {
+	await requestVoid("/api/auth/logout", {
+		method: "POST",
+	});
+}
+
+export async function fetchMe(): Promise<AuthUser> {
+	const response = await requestJson<{ user: AuthUser }>("/api/auth/me");
+	return response.user;
+}
+
+export async function fetchAdminUsers(): Promise<AdminUser[]> {
+	const response = await requestJson<{ items: AdminUser[] }>(
+		"/api/admin/users",
+	);
+	return response.items;
+}
+
+export async function createAdminUser(params: {
+	email: string;
+	displayName: string;
+	role: "admin" | "member";
+	initialPassword: string;
+}): Promise<AdminUser> {
+	const response = await requestJson<{ user: AdminUser }>("/api/admin/users", {
+		method: "POST",
+		body: params,
+	});
+	return response.user;
+}
+
+export async function updateAdminUser(
+	userId: string,
+	params: { displayName?: string; role?: "admin" | "member" },
+): Promise<AdminUser> {
+	const response = await requestJson<{ user: AdminUser }>(
+		`/api/admin/users/${userId}`,
+		{
+			method: "PATCH",
+			body: params,
+		},
+	);
+	return response.user;
+}
+
+export async function disableAdminUser(userId: string): Promise<AdminUser> {
+	const response = await requestJson<{ user: AdminUser }>(
+		`/api/admin/users/${userId}/disable`,
+		{
+			method: "POST",
+		},
+	);
+	return response.user;
+}
+
+export async function enableAdminUser(userId: string): Promise<AdminUser> {
+	const response = await requestJson<{ user: AdminUser }>(
+		`/api/admin/users/${userId}/enable`,
+		{
+			method: "POST",
+		},
+	);
+	return response.user;
+}
+
+export async function resetAdminUserPassword(
+	userId: string,
+	newPassword: string,
+): Promise<void> {
+	await requestVoid(`/api/admin/users/${userId}/reset-password`, {
+		method: "POST",
+		body: { newPassword },
 	});
 }

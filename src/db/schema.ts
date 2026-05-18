@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+	boolean,
 	customType,
 	index,
 	integer,
@@ -259,6 +260,50 @@ export const retrievalLogs = pgTable(
 			table.conversationId,
 		),
 		messageIdx: index("retrieval_logs_message_id_idx").on(table.messageId),
+	}),
+);
+
+export const users = pgTable(
+	"users",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		email: text("email").notNull().unique(),
+		passwordHash: text("password_hash").notNull(),
+		displayName: text("display_name").notNull(),
+		role: text("role").notNull().default("member"),
+		isActive: boolean("is_active").notNull().default(true),
+		lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => ({
+		emailIdx: uniqueIndex("users_email_idx").on(table.email),
+		roleIdx: index("users_role_idx").on(table.role),
+		isActiveIdx: index("users_is_active_idx").on(table.isActive),
+	}),
+);
+
+export const refreshTokens = pgTable(
+	"refresh_tokens",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		token: text("token").notNull().unique(),
+		userId: uuid("user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => ({
+		tokenIdx: uniqueIndex("refresh_tokens_token_idx").on(table.token),
+		userIdIdx: index("refresh_tokens_user_id_idx").on(table.userId),
+		expiresAtIdx: index("refresh_tokens_expires_at_idx").on(table.expiresAt),
 	}),
 );
 

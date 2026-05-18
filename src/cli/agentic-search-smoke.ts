@@ -349,6 +349,7 @@ async function runAgenticCheck(
 
 		const result = await service.run({
 			query: options.query,
+			userId: "local",
 			topK: options.topK,
 			category: options.category,
 		});

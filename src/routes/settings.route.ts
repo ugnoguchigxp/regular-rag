@@ -1,6 +1,7 @@
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { z } from "zod";
+import { getAuthContextUser } from "../modules/auth/context";
 import type { SettingsRepository } from "../modules/settings/settings.repository";
 
 const UpdateSystemContextSchema = z.object({
@@ -15,31 +16,12 @@ export function createSettingsRoute(deps: SettingsRouteDeps) {
 	if (!deps?.settingsRepository) {
 		throw new Error("settingsRepository is not configured");
 	}
-	const repo = deps.settingsRepository as unknown as {
-		getSystemContext?: () => Promise<{
-			systemContext: string;
-			updatedAt: Date;
-		}>;
-		getUserSettings?: (userId: string) => Promise<{
-			systemContext: string;
-			updatedAt: Date;
-		}>;
-		updateSystemContext?: (...args: string[]) => Promise<{
-			systemContext: string;
-			updatedAt: Date;
-		}>;
-	};
+	const repo = deps.settingsRepository;
 
 	return new Hono()
 		.get("/system-context", async (c) => {
-			const record = repo.getSystemContext
-				? await repo.getSystemContext()
-				: repo.getUserSettings
-					? await repo.getUserSettings("local")
-					: null;
-			if (!record) {
-				throw new Error("settingsRepository.getSystemContext is not available");
-			}
+			const authUser = getAuthContextUser(c);
+			const record = await repo.getSystemContextForUser(authUser.userId);
 			return c.json({
 				systemContext: record.systemContext,
 				updatedAt: record.updatedAt.toISOString(),
@@ -49,16 +31,12 @@ export function createSettingsRoute(deps: SettingsRouteDeps) {
 			"/system-context",
 			zValidator("json", UpdateSystemContextSchema),
 			async (c) => {
+				const authUser = getAuthContextUser(c);
 				const body = c.req.valid("json");
-				if (!repo.updateSystemContext) {
-					throw new Error(
-						"settingsRepository.updateSystemContext is not available",
-					);
-				}
-				const record =
-					repo.updateSystemContext.length >= 2
-						? await repo.updateSystemContext("local", body.systemContext)
-						: await repo.updateSystemContext(body.systemContext);
+				const record = await repo.updateSystemContext(
+					body.systemContext,
+					authUser.userId,
+				);
 				return c.json({
 					systemContext: record.systemContext,
 					updatedAt: record.updatedAt.toISOString(),

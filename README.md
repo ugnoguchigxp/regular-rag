@@ -1,279 +1,247 @@
-# regular-rag
+# 🚀 regular-rag
 
-Hono 専用の Artifact RAG アプリです。  
-`wiki/pages/**/*.md` を取り込み、ハイブリッド検索（pgvector + 全文）で根拠付き回答を返します。
+[![Bun](https://img.shields.io/badge/Bun-%23000000.svg?style=for-the-badge&logo=bun&logoColor=white)](https://bun.sh/)
+[![Hono](https://img.shields.io/badge/Hono-%23E36022.svg?style=for-the-badge&logo=hono&logoColor=white)](https://hono.dev/)
+[![React](https://img.shields.io/badge/React-%2320232a.svg?style=for-the-badge&logo=react&logoColor=%2361DAFB)](https://react.dev/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-%23316192.svg?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 
-## 構成
+Hono (Backend) + React & Vite (Frontend) で構築された、**ローカル Markdown 知識ベース専用のエンタープライズグレード RAG (Retrieval-Augmented Generation) プラットフォーム**です。  
+独自のハイブリッド検索（pgvector + PostgreSQL 全文検索）と、OpenAI/Azure OpenAI の **Responses API を用いた自律的エージェント検索 (Agentic Search)** を備え、Claude風の **Artifact 自動抽出エンジン** や **堅牢なロールベースユーザー管理 (RBAC)** を完備しています。
 
-- Backend: Hono (`/api/**`)
-- Frontend: React + Vite
-- DB: PostgreSQL + pgvector + pg_trgm
-- LLM / Embedding: Azure OpenAI
+---
 
-## 前提
+## 🌟 主な機能 (Key Features)
 
-- Bun
-- PostgreSQL（`vector` と `pg_trgm` が有効化できること）
-- Azure OpenAI の API キー（チャット/埋め込みを使う場合）
-- Agentic Search 用のキー
-  - OpenAI API を使う場合: `OPENAI_API_KEY`
-  - Azure OpenAI を使う場合: `AZURE_OPENAI_API_KEY`（`AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT` も必要）
+### 1. 🔍 ハイブリッド・セマンティック検索 (RRF Hybrid Search)
+* **セマンティック検索**: `pgvector` を用いた高精度な多次元ベクトル近傍探索。
+* **高速全文検索**: PostgreSQL の `pg_trgm` と FTS (Full-Text Search) を利用した日本語対応トークナイズド探索。
+* **RRF (Reciprocal Rank Fusion)**: ベクトルスコアとテキストスコアを自動で重み付け融合し、最適な順位で知識断片（Fragments）をマージ・抽出します。
 
-## セットアップ
+### 2. 🤖 自律的エージェント検索 (Agentic Search)
+OpenAI / Azure OpenAI の `function tools` や `Responses API` を用いた、LLM自身が能動的に情報収拾と検証を行うアドバンスド検索モードです。以下のツールを状況に応じて自律的に呼び出します。
+* `full_text_search` / `vector_search`: ナレッジベースのインデックス検索。
+* `wiki_read`: チャンク断片（Fragment）だけでなく、オリジナルのWikiドキュメント本文をまるごと動的に読み直して文脈を検証。
+* `web_search`: ローカルナレッジにない時事問題や外部知識を補うため、**Exa Search** や **Brave Search** を用いてWeb検索。
+* `fetch`: Web検索結果のURLからHTMLをフェッチし、`cheerio` を用いて不要タグ（広告・ナビゲーション等）を除去・最適化したクリーンな本文テキストを抽出してコンテキストに挿入。
 
+### 3. 💎 Claude風 Artifacts エンジン
+生成AIの出力に含まれるコードやデータ構造をリアルタイムで検知し、右側の専用パネルに美しいカードビューとして自動抽出・バージョン管理します。
+* **サポート形式**: `markdown`, `table`, `mermaid` (ダイアグラム自動描画), `chart`, `json`, `code`, `diagram-dsl`。
+
+### 4. 🔒 堅牢なロールベースユーザー管理 (RBAC & Auth)
+セルフサインアップを意図的に排除し、クローズドな知識共有に適した強固な認証システムを実装しています。
+* **暗号化アルゴリズム**: `scrypt` による安全なパスワードハッシュ。
+* **セッション管理**: `jose` ライブラリを用いた、JWT Access/Refresh Tokens の httpOnly Cookie 管理。
+* **安全な設計**: Refresh Token の SHA-256 ハッシュ化DB保存、およびワンタイム利用によるローテーション。
+* **通信セキュリティ**: CORS許可オリジン制御 / CSRF保護 / Secure Headers / レート制限を標準適用。
+* **管理者機能**: `admin` ロール専用のユーザー追加・無効化（`isActive` の制御）・パスワードリセットが可能な「管理者管理パネル」を内蔵。
+
+---
+
+## 🏗️ システムアーキテクチャ (Architecture)
+
+```mermaid
+graph TD
+    subgraph Frontend (React + Vite)
+        UI[App.tsx] -->|React Router / UI Components| Tabs[Knowledge | Chat | Search | Admin]
+        UI -->|API Client| API[api.ts]
+    end
+
+    subgraph Backend (Hono + Bun)
+        API -->|HTTP Requests| Hono[app/server.ts]
+        Hono -->|Secure Auth Middleware| Auth[modules/auth]
+        Hono -->|API Routes| Routes[routes/*]
+        
+        subgraph Services & Logic
+            Routes -->|RAG Operations| Rag[modules/rag]
+            Routes -->|Chat Completion| Chat[modules/chat]
+            Routes -->|Agentic Loop| Agent[modules/agentic-search]
+        end
+    end
+
+    subgraph Database & AI
+        Rag -->|Hybrid Retriever / RRF| DB[(PostgreSQL + pgvector)]
+        Chat -->|Context Construction| DB
+        Agent -->|Tool Execution| Tools[Registry: Search, Wiki, Web, Fetch]
+        Tools -->|Vector Search| DB
+        Tools -->|Web Search| Exa[Exa / Brave API]
+        Tools -->|Fetch Page| Cheerio[cheerio DOM Parser]
+        
+        Agent -->|Responses API| LLM[OpenAI / Azure OpenAI]
+    end
+```
+
+---
+
+## 🛠️ 前提条件 (Prerequisites)
+
+* **Bun** (>= 1.0)
+* **PostgreSQL** (with `vector` and `pg_trgm` extensions enabled)
+* **AI API Credentials**:
+  * **Azure OpenAI** or **OpenAI** API Key
+  * **Exa Search** or **Brave Search** API Key (Web検索機能用)
+
+---
+
+## 📦 セットアップ & インストール (Installation)
+
+### 1. 依存関係のインストール
 ```bash
 bun install
+```
+
+### 2. 環境変数の設定
+`.env.example` をコピーして `.env` を作成し、必要なパラメータを設定します。
+```bash
 cp .env.example .env
 ```
 
-`.env` を編集し、最低限次を設定します。
+| 変数名 | 説明 | 既定値 / 例 |
+| :--- | :--- | :--- |
+| `DATABASE_URL` | PostgreSQL 接続文字列 | `postgres://user:pass@localhost:5432/regular_rag` |
+| `REGULAR_RAG_CONTENT_ROOT` | Markdown知識ベースの格納ルートディレクトリ | `../wiki-knowledge` |
+| `JWT_SECRET` | JWTアクセストークン署名用のシークレット | (ランダムな文字列を設定) |
+| `COOKIE_SAME_SITE` | 認証Cookieの `SameSite` 属性 | `lax` (`none` の場合は HTTPS 必須) |
+| `APP_URL` | 公開アプリURL (HTTPS 判定・Cookie secure 判定に利用) | `http://localhost:5173` |
+| `CORS_ORIGIN` | API を許可する Origin (`,` 区切り) | `http://localhost:5173` |
+| `TRUST_PROXY` | `x-forwarded-for` 等のプロキシヘッダを信頼するか | `false` |
+| `WEB_SEARCH_PROVIDER` | Web検索プロバイダ名 | `exa` または `brave` |
+| `EXA_API_KEY` | Exa Web Search API キー | (Exaを利用する場合設定) |
+| `BRAVE_SEARCH_API_KEY` | Brave Search API キー | (Braveを利用する場合設定) |
+| `AZURE_OPENAI_API_KEY` | Azure OpenAI の API キー | (Azure OpenAI利用時) |
+| `AZURE_OPENAI_ENDPOINT` | Azure OpenAI の エンドポイント URL | `https://xxxx.openai.azure.com/` |
+| `AZURE_OPENAI_DEPLOYMENT` | チャット/エージェント用デプロイ名 | `gpt-5-4-mini` 等 |
+| `OPENAI_API_KEY` | OpenAI 直利用時の API キー | (OpenAI直利用時) |
 
-- `DATABASE_URL`
-- `REGULAR_RAG_CONTENT_ROOT`（既定: `../wiki-knowledge`）
-- Azure OpenAI の各環境変数
-- Agentic Search 用の環境変数
-  - OpenAI: `OPENAI_API_KEY`（任意で `OPENAI_BASE_URL`）
-  - Azure: `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`
-  - Responses API の API バージョンを明示したい場合のみ `OPENAI_API_VERSION`（通常は未設定）
-  - Agentic Search の model/deployment 名は `AZURE_OPENAI_DEPLOYMENT` を使う
-
-PostgreSQL をローカル起動する場合:
-
+### 3. PostgreSQL のローカル起動 (Docker)
+ローカルで Docker を用いてベクトル対応の PostgreSQL を立ち上げる場合は、以下を実行します。
 ```bash
 docker compose up -d db
 ```
 
-## 起動
-
-開発:
-
-```bash
-bun run dev
-```
-
-- UI: [http://localhost:5173](http://localhost:5173)
-- API: `http://localhost:5173/api/*`
-
-本番相当サーバー:
-
-```bash
-bun run start
-```
-
-## マイグレーション
-
+### 4. データベース・マイグレーション
+Drizzle ORM を使ってテーブルを作成し、`vector` / `pg_trgm` エクステンションを有効化します。
 ```bash
 bun run db:migrate
 ```
 
-`db:migrate` は `drizzle/*.sql` を順に適用します（適用履歴は `regular_rag_schema_migrations`）。
-初回は `drizzle/0001_sources_chat_artifacts.sql` が適用され、以下を作成します。
+### 5. 初期管理者（Admin）のアカウント作成
+セルフサインアップが無効化されているため、初回のみ CLI を用いて管理ユーザーを作成します。
+```bash
+bun run auth:create-admin -- --email admin@example.com --name Admin
+```
+*(実行時に対話形式でパスワードの入力が求められます)*
 
-- `sources`
-- `source_fragments`
-- `conversations`
-- `messages`
-- `artifacts`
-- `retrieval_logs`
+---
 
-## Markdown 取り込み
+## 🚀 クイックスタート (Quick Start)
 
-カテゴリルール:
+### 1. 開発用サーバーの起動
+フロントエンド (Vite) と バックエンド (Hono) を同時に統合した開発サーバーを起動します。
+```bash
+bun run dev
+```
+* **UI アプリケーション**: [http://localhost:5173](http://localhost:5173)
+* **API エンドポイント**: `http://localhost:5173/api/*`
 
-- `pages/` 直下のトップレベルフォルダをカテゴリとして扱います
-  - 例: `pages/tech/**` は `tech` カテゴリ
-- `pages/` 直下への Markdown 配置は不可です（`pages/index.md`, `pages/foo.md` など）
-- ドキュメントは必ず `pages/<category>/...` 配下に配置してください
-- 互換のため `pages/index.md` が残っていた場合は、`wiki:index` 実行時に
-  `pages/tech/index.md` へ移行、または `pages/tech/index.legacy*.md` へ退避されます
-- `wiki:index` は各ドキュメントを自動で slug 登録します
-  - 例: `pages/tech/hono/routing.md` -> `tech/hono/routing`
-  - 既存行も再取り込み時に `metadata.wikiSlug` / `relativePath` が更新されます
-
-推奨: 2-phase で順次実行（全文検索登録 → embedding 登録）
-
+### 2. 知識ベース (Markdown) のインデックス化
+RAGの対象とするドキュメント（`pages/<category>/**/*.md`）を読み込み、FTSインデックスの作成と Embedding ベクトルの自動計算（バックフィル）を一括実行します。
 ```bash
 bun run wiki:index:all
 ```
 
-Phase を分けて実行する場合:
-
+### 3. Agentic Search 疎通テスト
+LLMの接続状態、Embeddingの作成能力、およびエージェントの自律応答フローに問題がないか確認できるスモークテスト用 CLI を備えています。
 ```bash
-# Phase 1: 全文検索登録（embedding を付与しない）
-bun run wiki:index:fts
-
-# Phase 2: embedding バックフィル
-bun run wiki:index:embed
-```
-
-詳細オプション（`wiki:index`）:
-
-```bash
-bun run wiki:index --phase=all --batch-size=25 --max-fragments=0 --sleep-ms=0
-```
-
-実行中は `[wiki:index]` プレフィックスで進捗ログ（phase開始、ファイル取り込み、embedding進捗）が出力され、
-最後に JSON サマリが出力されます。
-
-- `--phase=fts|embed|all`
-  - `fts`: `sources` / `source_fragments` と全文検索向け `search_vector` を更新
-  - `embed`: `source_fragments.embedding IS NULL` の行だけを順次埋める
-  - `all`: `fts` → `embed` の順で実行
-- `--batch-size`: embedding バックフィル時の1回あたり取得件数（既定: `25`）
-- `--max-fragments`: embedding バックフィルの上限件数（`0` で無制限）
-- `--sleep-ms`: 各 fragment の embedding 実行後に待機するミリ秒
-
-既存DBで `wikiSlug` が未登録の行を一括登録する場合:
-
-```bash
-# 未登録（metadata.wikiSlug が空）のみ更新
-bun run wiki:register:missing-slugs
-
-# 反映せず確認のみ
-bun run wiki:register:missing-slugs --dry-run
-
-# 既存全件を再計算して更新
-bun run wiki:register:missing-slugs --all
-```
-
-従来の単発取り込み（embedding 付与込み）:
-
-```bash
-bun run import:markdown
-```
-
-取り込み元:
-
-- `${REGULAR_RAG_CONTENT_ROOT}/pages/<category>/**/*.md`
-
-補助ディレクトリ:
-
-- `${REGULAR_RAG_CONTENT_ROOT}/wiki/`（UI/メタ用途）
-
-## API 概要
-
-### Health
-
-- `GET /api/health`
-- `GET /api/sources/health`
-
-### Sources
-
-- `GET /api/sources/tree`
-- `GET /api/sources/categories`
-- `GET /api/sources/search?q=...`
-- `POST /api/sources/reindex`
-- `GET /api/sources/pages/*`
-- `POST /api/sources/pages`
-- `PUT /api/sources/pages/*`
-- `DELETE /api/sources/pages/*`
-- `GET /api/sources/folders`
-- `POST /api/sources/folders`
-- `PUT /api/sources/folders/*`
-- `DELETE /api/sources/folders/*`
-- `GET /api/sources/history/*`
-- `GET /api/sources/diff/*?from=...&to=...`
-
-### Chat / Retrieval
-
-- `POST /api/chat`
-- `POST /api/chat/stream`
-- `GET /api/chat/conversations`
-- `GET /api/chat/conversations/:conversationId/messages`
-- `GET /api/chat/conversations/:conversationId/retrieval-logs`
-- `POST /api/search`
-- `POST /api/agentic-search`
-
-### Settings
-
-- `GET /api/settings/system-context`
-- `PUT /api/settings/system-context`
-
-`POST /api/chat`, `POST /api/chat/stream`, `POST /api/search` は
-`category` を指定すると、そのカテゴリに限定して検索/RAG実行できます。
-
-`POST /api/agentic-search` は OpenAI Responses API の function tools を使います。
-LLM が検索不要と判断した場合はそのまま回答し、検索が必要な場合は `search_evidence`
-で全文検索 / Vector 検索 / Web 検索を同じ query で一括実行してから回答します。
-必要に応じて `wiki_read` / `fetch` で本文も読み込みます。
-
-Web 検索は `.env` の `WEB_SEARCH_PROVIDER=exa` と `EXA_API_KEY` で Exa を使います。
-Brave を明示利用する場合だけ `WEB_SEARCH_PROVIDER=brave` と `BRAVE_SEARCH_API_KEY`
-を設定してください。
-
-### Agentic Search 疎通テスト
-
-```bash
-# embedding API / responses API / agentic回答を一括チェック
 bun run agentic:smoke
-
-# Responses API と embedding API の疎通だけ確認
-bun run agentic:smoke --connect-only
-
-# JSONで結果を取得
-bun run agentic:smoke --json
 ```
 
-`DeploymentNotFound` が出る場合は以下を優先確認してください。
+---
 
-- `AZURE_OPENAI_DEPLOYMENT` が Azure deployment 名と完全一致しているか
-- `AZURE_OPENAI_ENDPOINT` が対象リソースの endpoint か
-- `OPENAI_BASE_URL` を手動指定している場合、`/openai/v1` ベースになっているか
+## 📖 機能と仕様の詳細 (Deep Dive)
 
-### Artifacts
+### 📂 Markdown 取り込みのカテゴリルール
+知識ベースは以下のルールに従って配置してください。
+* `pages/` 直下の第1階層フォルダがそのまま「カテゴリ」として認識されます。
+  * `pages/tech/hono.md` ➔ カテゴリは `tech`、slugは `tech/hono`
+  * `pages/finance/report.md` ➔ カテゴリは `finance`、slugは `finance/report`
+* `pages/` 直下への直接的な Markdown ファイル配置はエラーとなるため避けてください。
 
-- `GET /api/artifacts`
-- `GET /api/artifacts/:artifactId`
-- `PUT /api/artifacts/:artifactId`
-
-## Artifact 形式
-
-LLM 出力内の次形式を抽出して保存します。
-
-```xml
-<artifact type="markdown" title="...">
-...
-</artifact>
-```
-
-対応 type:
-
-- `markdown`
-- `table`
-- `mermaid`
-- `chart`
-- `json`
-- `code`
-- `diagram-dsl`
-
-## 品質ゲート
-
+### ⚙️ 品質ゲート (Quality Gates)
+プロダクションリリースの品質を保証するため、以下のCIチェックを実行可能です。
 ```bash
 bun run verify
 ```
+これにより、以下のプロセスがシーケンシャルに検証されます。
+1. **型チェック**: `tsc --noEmit`
+2. **静的解析 (Biom Linter)**: `biome lint`
+3. **コードフォーマットチェック**: `biome format`
+4. **テストスイート実行 (Vitest)**: `vitest run`
+5. **プロダクションビルドテスト**: `tsup` & `vite build`
 
-実行内容:
+---
 
-- `typecheck`
-- `lint`
-- `format:check`
-- `test`
-- `build`
+## 📋 主要 API エンドポイント
 
-## 主要ディレクトリ
+### 🔐 認証 (Authentication)
+* `POST /api/auth/login` - ログイン (httpOnly Cookie にトークンをセット)
+* `POST /api/auth/refresh` - トークンのリフレッシュ・ローテーション
+* `POST /api/auth/logout` - ログアウト (Cookieクリア)
+* `GET /api/auth/me` - 現在ログインしているユーザー情報の取得
+
+### 👥 管理者機能 (Admin Users - 要 Admin 権限)
+* `GET /api/admin/users` - 登録ユーザー一覧の取得
+* `POST /api/admin/users` - 新規ユーザーの招待/作成
+* `PATCH /api/admin/users/:userId` - ユーザー名やロールの更新
+* `POST /api/admin/users/:userId/disable` - ユーザーのアカウント有効化/無効化
+* `POST /api/admin/users/:userId/reset-password` - パスワードの強制リセット
+
+### 💬 チャット & 検索 (Chat & RAG Search)
+* `POST /api/chat` - RAGを活用した対話 (履歴のユーザー保存)
+* `GET /api/chat/conversations` - チャットセッション履歴の取得
+* `DELETE /api/chat/conversations/:conversationId` - 会話セッションの削除
+* `POST /api/search` - 通常のハイブリッド検索結果（全文 vs ベクトル）の比較結果取得
+* `POST /api/agentic-search` - 自律的エージェント型検索の実行
+
+---
+
+## 💎 プロジェクトのディレクトリ構造
 
 ```txt
 src/
-  app/                    # Hono app runtime / server
-  routes/                 # API routes
+  app/                    # Hono アプリのブートストラップ・サーバー設定
+  routes/                 # API ルート定義 (認証、検索、管理機能など)
+  middleware/             # JWT認証認証・管理者検証などのミドルウェア
+  db/                     # Drizzle スキーマ、マイグレーション、DB接続
   modules/
-    sources/              # wiki content repo / markdown importer / source repository
-    rag/                  # retriever (RRF merge)
-    chat/                 # chat service
-    artifacts/            # artifact extraction / parsing
-  db/                     # drizzle schema / db connection
+    auth/                 # 認証ロジック、パスワードハッシュ (scrypt)
+    settings/             # ユーザー設定・システムコンテキストの永続化
+    rag/                  # ハイブリッドリトリーバー (RRFマージ)
+    agentic-search/       # エージェントループ、MCP互換ツール、LLMアダプター
+    sources/              # Wiki記事の解析、Slug生成、インポータ
+    chat/                 # チャットサービス、RAGメッセージ管理
+    artifacts/            # <artifact> XML抽出と解析
 web/
-  src/                    # React UI
-drizzle/
-  0001_sources_chat_artifacts.sql
+  src/
+    domains/              # 機能ドメイン別のコンポーネント (Chat, Search)
+    admin-user-management/# 管理者向けユーザー管理パネル UI
+    knowledge-workspace/  # 知識ベース (Wiki) の閲覧・編集ワークスペース
+    api.ts                # バックエンドAPIへの接続クライアント
+    App.tsx               # アプリケーションのメイン画面・認証ラッパー
+    styles.css            # プレミアムでモダンな Vanilla CSS デザイン
 ```
+
+---
+
+## 🤝 貢献方法 (Contributing)
+
+1. リポジトリをフォークします。
+2. 機能追加やバグ修正を行い、ブランチを作成します。
+3. コードがフォーマットされ、テストが通ることを確認します (`bun run verify`)。
+4. プルリクエストを作成してください。
+
+---
+
+## 📄 ライセンス
+
+本プロジェクトは [MIT License](LICENSE.md) のもとで公開されています。

@@ -5,6 +5,7 @@ import type { SettingsRepository } from "../settings/settings.repository";
 
 type RunAgenticSearchInput = {
 	query: string;
+	userId: string;
 	category?: string;
 	topK: number;
 };
@@ -59,7 +60,9 @@ export class AgenticSearchService {
 			topK: input.topK,
 		});
 
-		const settings = await this.settingsRepository.getSystemContext();
+		const settings = await this.settingsRepository.getSystemContextForUser(
+			input.userId,
+		);
 		const systemContext = buildAgenticSystemContext({
 			userSystemContext: settings.systemContext,
 			category: input.category,

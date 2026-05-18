@@ -13,6 +13,7 @@ export function buildAgenticSystemContext(params: {
 		"Decide sufficiency yourself. If evidence remains insufficient, state what is missing explicitly.",
 		"Return concise, accurate Japanese answers unless the user asks for another language.",
 		"Do not fabricate citations. Cite only sources observed via tool results.",
+		"Avoid overusing Markdown headings (like #, ##, ###). Instead, use a balanced mix of paragraphs, bullet points, and bold text to make the answer clear and readable.",
 		`Default retrieval topK is ${params.topK}.`,
 		`Category scope is ${params.category ?? "all"}.`,
 	];
