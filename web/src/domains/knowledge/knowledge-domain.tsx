@@ -39,14 +39,17 @@ export const KnowledgeNavigationProvider = ({
 		at: 0,
 	});
 
-	const openKnowledge = useCallback((slug: string) => {
-		if (!slug) return;
-		setSelection((previous) => ({
-			slug,
-			at: previous.at + 1,
-		}));
-		onOpenKnowledge?.(slug);
-	}, [onOpenKnowledge]);
+	const openKnowledge = useCallback(
+		(slug: string) => {
+			if (!slug) return;
+			setSelection((previous) => ({
+				slug,
+				at: previous.at + 1,
+			}));
+			onOpenKnowledge?.(slug);
+		},
+		[onOpenKnowledge],
+	);
 
 	const value = useMemo<KnowledgeNavigationContextValue>(
 		() => ({
@@ -73,7 +76,9 @@ export const useKnowledgeNavigation = (): KnowledgeNavigationContextValue => {
 	return context;
 };
 
-export const KnowledgeDomainSection = ({ active }: KnowledgeDomainSectionProps) => {
+export const KnowledgeDomainSection = ({
+	active,
+}: KnowledgeDomainSectionProps) => {
 	const { selection } = useKnowledgeNavigation();
 	if (!active) return null;
 	return (

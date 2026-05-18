@@ -273,7 +273,9 @@ export function App() {
 			/>
 
 			{authUser ? (
-				<KnowledgeNavigationProvider onOpenKnowledge={() => setTab("knowledge")}>
+				<KnowledgeNavigationProvider
+					onOpenKnowledge={() => setTab("knowledge")}
+				>
 					<KnowledgeDomainSection active={tab === "knowledge"} />
 					<ChatDomainSection
 						active={tab === "chat"}
