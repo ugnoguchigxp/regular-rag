@@ -261,3 +261,14 @@ export const retrievalLogs = pgTable(
 		messageIdx: index("retrieval_logs_message_id_idx").on(table.messageId),
 	}),
 );
+
+export const userSettings = pgTable("user_settings", {
+	userId: text("user_id").primaryKey(),
+	systemContext: text("system_context").default("").notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true })
+		.defaultNow()
+		.notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true })
+		.defaultNow()
+		.notNull(),
+});

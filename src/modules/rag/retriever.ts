@@ -113,6 +113,30 @@ function mergeRrf(
 		.slice(0, topK);
 }
 
+function toSourceAggregationKey(item: RetrievedFragment): string {
+	return item.wikiSlug ?? item.sourceId ?? item.sourceUri;
+}
+
+function aggregateFragmentsBySource(
+	fragments: RetrievedFragment[],
+	topK: number,
+): RetrievedFragment[] {
+	const aggregated = new Map<string, RetrievedFragment>();
+	for (const fragment of fragments) {
+		const key = toSourceAggregationKey(fragment);
+		const existing = aggregated.get(key);
+		if (!existing) {
+			aggregated.set(key, {
+				...fragment,
+				sourceHitCount: 1,
+			});
+			continue;
+		}
+		existing.sourceHitCount = (existing.sourceHitCount ?? 1) + 1;
+	}
+	return [...aggregated.values()].slice(0, topK);
+}
+
 function toVectorFragments(
 	results: Array<{
 		id: string;
@@ -127,7 +151,7 @@ function toVectorFragments(
 	}>,
 	topK: number,
 ): RetrievedFragment[] {
-	return results.slice(0, topK).map((item) => {
+	const fragments = results.map((item) => {
 		const linkRef = resolveWikiLinkRef({
 			sourceUri: item.sourceUri,
 			sourceMetadata: item.sourceMetadata,
@@ -148,6 +172,7 @@ function toVectorFragments(
 			wikiRawPath: linkRef?.wikiRawPath ?? null,
 		};
 	});
+	return aggregateFragmentsBySource(fragments, topK);
 }
 
 function toTextFragments(
@@ -164,7 +189,7 @@ function toTextFragments(
 	}>,
 	topK: number,
 ): RetrievedFragment[] {
-	return results.slice(0, topK).map((item) => {
+	const fragments = results.map((item) => {
 		const linkRef = resolveWikiLinkRef({
 			sourceUri: item.sourceUri,
 			sourceMetadata: item.sourceMetadata,
@@ -185,6 +210,7 @@ function toTextFragments(
 			wikiRawPath: linkRef?.wikiRawPath ?? null,
 		};
 	});
+	return aggregateFragmentsBySource(fragments, topK);
 }
 
 function withTextFallback(

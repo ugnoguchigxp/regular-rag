@@ -75,5 +75,6 @@ export interface WebSearchOptions {
  * Web 検索プロバイダーインターフェース
  */
 export interface WebSearchProvider {
+	readonly name?: string;
 	search(options: WebSearchOptions): Promise<WebSearchResult[]>;
 }

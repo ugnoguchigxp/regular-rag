@@ -276,7 +276,7 @@ select {
 
 .search-results-grid {
 	display: grid;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
+	grid-template-columns: repeat(3, minmax(0, 1fr));
 	gap: 14px;
 	flex: 1;
 	min-height: 0;
@@ -393,7 +393,16 @@ select {
 	text-decoration: none;
 }
 
+.google-result-title-anchor {
+	color: #1a0dab;
+	text-decoration: none;
+}
+
 .google-result-title-link:hover {
+	text-decoration: underline;
+}
+
+.google-result-title-anchor:hover {
 	text-decoration: underline;
 }
 
@@ -547,6 +556,20 @@ select {
 	background: #f2fbf7;
 }
 
+.chat-markdown-viewer {
+	border: 1px solid #dce8e2;
+	border-radius: 6px;
+	background: #ffffff;
+	overflow: visible;
+}
+
+.chat-markdown-viewer .wysiwyg-viewer {
+	min-height: 0;
+	max-height: none;
+	padding: 10px 12px;
+	overflow: visible;
+}
+
 .composer {
 	padding: 10px;
 	border-top: 1px solid #eef1f5;
@@ -590,7 +613,7 @@ select {
 	gap: 8px;
 }
 
-.artifact-row pre {
+.artifact-row > pre {
 	margin: 0;
 	background: #f1f5f9;
 	border-radius: 6px;
@@ -600,9 +623,23 @@ select {
 	font-size: 12px;
 }
 
-.artifact-row p {
+.artifact-row > p {
 	margin: 0;
 	white-space: pre-wrap;
+}
+
+.agentic-answer-viewer {
+	border: 1px solid #e2e8f0;
+	border-radius: 6px;
+	background: #ffffff;
+	overflow: visible;
+}
+
+.agentic-answer-viewer .wysiwyg-viewer {
+	min-height: 0;
+	max-height: none;
+	padding: 10px 12px;
+	overflow: visible;
 }
 
 .diff-view {

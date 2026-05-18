@@ -12,7 +12,7 @@ import {
 	retrievalLogs,
 } from "../db/schema";
 import { ChatService } from "../modules/chat/chat.service";
-import type { SourceRetriever } from "../modules/rag/retriever";
+import type { SearchEvidenceCollector } from "../modules/rag/search-evidence";
 import type { LlmProvider } from "../providers/types";
 import type { ChatMessage } from "../types/llm";
 
@@ -43,15 +43,15 @@ const RetrievalLogsQuerySchema = z.object({
 
 type ChatRouteDeps = {
 	db: NodePgDatabase<typeof schema>;
-	retriever: SourceRetriever;
 	llmProvider: LlmProvider;
+	evidenceCollector: SearchEvidenceCollector;
 };
 
 export function createChatRoute(deps: ChatRouteDeps) {
 	const service = new ChatService({
 		db: deps.db,
-		retriever: deps.retriever,
 		llmProvider: deps.llmProvider,
+		evidenceCollector: deps.evidenceCollector,
 	});
 
 	return new Hono()
@@ -187,6 +187,7 @@ export function createChatRoute(deps: ChatRouteDeps) {
 							type: "retrieval_result",
 							citations: result.citations,
 							retrieved: result.retrieved,
+							webResults: result.webResults ?? [],
 						}),
 					});
 					await stream.writeSSE({

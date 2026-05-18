@@ -34,6 +34,7 @@ export type SourceSearchResult = {
 	id: string;
 	sourceId: string;
 	sourceUri: string;
+	sourceTitle: string | null;
 	sourceCategory: string;
 	sourceMetadata: unknown;
 	locator: string;
@@ -60,6 +61,67 @@ function defaultHash(input: string): string {
 function finiteOrZero(value: unknown): number {
 	const num = Number(value);
 	return Number.isFinite(num) ? num : 0;
+}
+
+const SEARCH_STOP_WORDS = new Set([
+	"a",
+	"an",
+	"and",
+	"are",
+	"for",
+	"in",
+	"is",
+	"of",
+	"on",
+	"or",
+	"the",
+	"to",
+	"with",
+	"この",
+	"その",
+	"あの",
+	"これ",
+	"それ",
+	"について",
+	"とは",
+	"では",
+	"です",
+	"ます",
+	"する",
+	"した",
+	"して",
+	"ください",
+	"教えて",
+]);
+
+export function normalizeSearchTerms(query: string): string[] {
+	const normalized = query.normalize("NFKC").toLowerCase();
+	const tokens =
+		normalized.match(
+			/(?:--?)?[a-z0-9][a-z0-9._:/@+-]*|[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}ー]+/giu,
+		) ?? [];
+	const result: string[] = [];
+	for (const token of tokens) {
+		const value = token.trim();
+		if (!value || SEARCH_STOP_WORDS.has(value)) continue;
+		if (value.length < 2 && !value.startsWith("-")) continue;
+		if (!result.includes(value)) {
+			result.push(value);
+		}
+	}
+	return result.slice(0, 12);
+}
+
+function minimumSearchTermMatches(termCount: number): number {
+	if (termCount >= 3) return 2;
+	return termCount > 0 ? 1 : 0;
+}
+
+function sumSql(parts: SQL<number>[]): SQL<number> {
+	return parts.reduce(
+		(acc, part) => sql<number>`(${acc} + ${part})`,
+		sql<number>`0`,
+	);
 }
 
 function chunkSourceDocument(params: {
@@ -345,6 +407,7 @@ export class SourceRepository {
 				id: sourceFragments.id,
 				sourceId: sourceFragments.sourceId,
 				sourceUri: sources.uri,
+				sourceTitle: sources.title,
 				sourceCategory: sources.category,
 				sourceMetadata: sources.metadata,
 				locator: sourceFragments.locator,
@@ -398,6 +461,7 @@ export class SourceRepository {
 				id: sourceFragments.id,
 				sourceId: sourceFragments.sourceId,
 				sourceUri: sources.uri,
+				sourceTitle: sources.title,
 				sourceCategory: sources.category,
 				sourceMetadata: sources.metadata,
 				locator: sourceFragments.locator,
@@ -422,25 +486,75 @@ export class SourceRepository {
 	): Promise<SourceSearchResult[]> {
 		const trimmedQuery = query.trim();
 		if (!trimmedQuery) return [];
+		const searchTerms = normalizeSearchTerms(trimmedQuery);
+		const rankQuery =
+			searchTerms.length > 0 ? searchTerms.join(" ") : trimmedQuery;
+		const exactPattern = `%${trimmedQuery}%`;
+		const minTermMatches = minimumSearchTermMatches(searchTerms.length);
 
 		const rankExpr = sql<number>`
       ts_rank_cd(
-        to_tsvector('simple', concat_ws(' ', ${sourceFragments.heading}, ${sourceFragments.content}, ${sourceFragments.metadata}::text)),
-        plainto_tsquery('simple', ${trimmedQuery})
+        to_tsvector('simple', concat_ws(' ', ${sources.title}, ${sourceFragments.heading}, ${sourceFragments.content}, ${sourceFragments.metadata}::text)),
+        plainto_tsquery('simple', ${rankQuery})
       )
     `;
 
 		const textMatchExpr = sql<boolean>`
-      to_tsvector('simple', concat_ws(' ', ${sourceFragments.heading}, ${sourceFragments.content}, ${sourceFragments.metadata}::text))
-      @@ plainto_tsquery('simple', ${trimmedQuery})
+      to_tsvector('simple', concat_ws(' ', ${sources.title}, ${sourceFragments.heading}, ${sourceFragments.content}, ${sourceFragments.metadata}::text))
+      @@ plainto_tsquery('simple', ${rankQuery})
     `;
+		const exactMatchExpr = or(
+			ilike(sources.title, exactPattern),
+			ilike(sourceFragments.heading, exactPattern),
+			ilike(sourceFragments.content, exactPattern),
+			sql`${sourceFragments.metadata}::text ilike ${exactPattern}`,
+		);
+		const termMatchCountExpr = sumSql(
+			searchTerms.map((term) => {
+				const pattern = `%${term}%`;
+				return sql<number>`CASE WHEN (
+          ${sources.title} ilike ${pattern}
+          OR ${sourceFragments.heading} ilike ${pattern}
+          OR ${sourceFragments.content} ilike ${pattern}
+          OR ${sourceFragments.metadata}::text ilike ${pattern}
+        ) THEN 1 ELSE 0 END`;
+			}),
+		);
+		const termScoreExpr = sumSql(
+			searchTerms.map((term) => {
+				const pattern = `%${term}%`;
+				return sql<number>`(
+          CASE WHEN ${sources.title} ilike ${pattern} THEN 4 ELSE 0 END
+          + CASE WHEN ${sourceFragments.heading} ilike ${pattern} THEN 3 ELSE 0 END
+          + CASE WHEN ${sourceFragments.content} ilike ${pattern} THEN 1 ELSE 0 END
+          + CASE WHEN ${sourceFragments.metadata}::text ilike ${pattern} THEN 0.5 ELSE 0 END
+        )`;
+			}),
+		);
+		const exactScoreExpr = sql<number>`(
+      CASE WHEN ${sources.title} ilike ${exactPattern} THEN 8 ELSE 0 END
+      + CASE WHEN ${sourceFragments.heading} ilike ${exactPattern} THEN 6 ELSE 0 END
+      + CASE WHEN ${sourceFragments.content} ilike ${exactPattern} THEN 5 ELSE 0 END
+      + CASE WHEN ${sourceFragments.metadata}::text ilike ${exactPattern} THEN 1 ELSE 0 END
+    )`;
+		const trigramScoreExpr = sql<number>`greatest(
+      similarity(coalesce(${sources.title}, ''), ${trimmedQuery}),
+      similarity(coalesce(${sourceFragments.heading}, ''), ${trimmedQuery}),
+      similarity(${sourceFragments.content}, ${trimmedQuery})
+    )`;
+		const scoreExpr = sql<number>`(
+      (${rankExpr} * 8)
+      + ${exactScoreExpr}
+      + ${termScoreExpr}
+      + (${trigramScoreExpr} * 2)
+    )`;
 
 		const conditions = [
 			or(
-				ilike(sourceFragments.content, `%${trimmedQuery}%`),
-				ilike(sourceFragments.heading, `%${trimmedQuery}%`),
-				sql`${sourceFragments.metadata}::text ilike ${`%${trimmedQuery}%`}`,
+				exactMatchExpr,
 				textMatchExpr,
+				sql`${termMatchCountExpr} >= ${minTermMatches}`,
+				sql`${trigramScoreExpr} >= 0.2`,
 			),
 		];
 		if (sourceKinds && sourceKinds.length > 0) {
@@ -455,17 +569,18 @@ export class SourceRepository {
 				id: sourceFragments.id,
 				sourceId: sourceFragments.sourceId,
 				sourceUri: sources.uri,
+				sourceTitle: sources.title,
 				sourceCategory: sources.category,
 				sourceMetadata: sources.metadata,
 				locator: sourceFragments.locator,
 				heading: sourceFragments.heading,
 				content: sourceFragments.content,
-				score: rankExpr,
+				score: scoreExpr,
 			})
 			.from(sourceFragments)
 			.innerJoin(sources, eq(sources.id, sourceFragments.sourceId))
 			.where(and(...conditions))
-			.orderBy(desc(rankExpr), desc(sourceFragments.createdAt))
+			.orderBy(desc(scoreExpr), desc(sourceFragments.createdAt))
 			.limit(limit);
 
 		return rows.map((row) => ({ ...row, score: finiteOrZero(row.score) }));
@@ -491,6 +606,40 @@ export class SourceRepository {
 			.where(eq(sourceFragments.id, fragmentId))
 			.limit(1);
 
+		return rows[0] ?? null;
+	}
+
+	async getSourceById(sourceId: string) {
+		const rows = await this.db
+			.select({
+				id: sources.id,
+				uri: sources.uri,
+				title: sources.title,
+				body: sources.body,
+				category: sources.category,
+				metadata: sources.metadata,
+				sourceKind: sources.sourceKind,
+			})
+			.from(sources)
+			.where(eq(sources.id, sourceId))
+			.limit(1);
+		return rows[0] ?? null;
+	}
+
+	async getSourceByUri(uri: string) {
+		const rows = await this.db
+			.select({
+				id: sources.id,
+				uri: sources.uri,
+				title: sources.title,
+				body: sources.body,
+				category: sources.category,
+				metadata: sources.metadata,
+				sourceKind: sources.sourceKind,
+			})
+			.from(sources)
+			.where(eq(sources.uri, uri))
+			.limit(1);
 		return rows[0] ?? null;
 	}
 }

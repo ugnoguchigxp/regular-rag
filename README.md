@@ -15,6 +15,9 @@ Hono 専用の Artifact RAG アプリです。
 - Bun
 - PostgreSQL（`vector` と `pg_trgm` が有効化できること）
 - Azure OpenAI の API キー（チャット/埋め込みを使う場合）
+- Agentic Search 用のキー
+  - OpenAI API を使う場合: `OPENAI_API_KEY`
+  - Azure OpenAI を使う場合: `AZURE_OPENAI_API_KEY`（`AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT` も必要）
 
 ## セットアップ
 
@@ -28,6 +31,11 @@ cp .env.example .env
 - `DATABASE_URL`
 - `REGULAR_RAG_CONTENT_ROOT`（既定: `../wiki-knowledge`）
 - Azure OpenAI の各環境変数
+- Agentic Search 用の環境変数
+  - OpenAI: `OPENAI_API_KEY`（任意で `OPENAI_BASE_URL`）
+  - Azure: `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`
+  - Responses API の API バージョンを明示したい場合のみ `OPENAI_API_VERSION`（通常は未設定）
+  - Agentic Search の model/deployment 名は `AZURE_OPENAI_DEPLOYMENT` を使う
 
 PostgreSQL をローカル起動する場合:
 
@@ -174,9 +182,43 @@ bun run import:markdown
 - `GET /api/chat/conversations/:conversationId/messages`
 - `GET /api/chat/conversations/:conversationId/retrieval-logs`
 - `POST /api/search`
+- `POST /api/agentic-search`
+
+### Settings
+
+- `GET /api/settings/system-context`
+- `PUT /api/settings/system-context`
 
 `POST /api/chat`, `POST /api/chat/stream`, `POST /api/search` は
 `category` を指定すると、そのカテゴリに限定して検索/RAG実行できます。
+
+`POST /api/agentic-search` は OpenAI Responses API の function tools を使います。
+LLM が検索不要と判断した場合はそのまま回答し、検索が必要な場合は `search_evidence`
+で全文検索 / Vector 検索 / Web 検索を同じ query で一括実行してから回答します。
+必要に応じて `wiki_read` / `fetch` で本文も読み込みます。
+
+Web 検索は `.env` の `WEB_SEARCH_PROVIDER=exa` と `EXA_API_KEY` で Exa を使います。
+Brave を明示利用する場合だけ `WEB_SEARCH_PROVIDER=brave` と `BRAVE_SEARCH_API_KEY`
+を設定してください。
+
+### Agentic Search 疎通テスト
+
+```bash
+# embedding API / responses API / agentic回答を一括チェック
+bun run agentic:smoke
+
+# Responses API と embedding API の疎通だけ確認
+bun run agentic:smoke --connect-only
+
+# JSONで結果を取得
+bun run agentic:smoke --json
+```
+
+`DeploymentNotFound` が出る場合は以下を優先確認してください。
+
+- `AZURE_OPENAI_DEPLOYMENT` が Azure deployment 名と完全一致しているか
+- `AZURE_OPENAI_ENDPOINT` が対象リソースの endpoint か
+- `OPENAI_BASE_URL` を手動指定している場合、`/openai/v1` ベースになっているか
 
 ### Artifacts
 

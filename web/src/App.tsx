@@ -1,5 +1,6 @@
 import {
 	Activity,
+	Brain,
 	BookOpen,
 	Bot,
 	Database,
@@ -7,26 +8,43 @@ import {
 	RefreshCw,
 	Search,
 	Send,
+	Sparkles,
 	Settings,
 } from "lucide-react";
+import mermaid from "mermaid";
+import { MarkdownEditor } from "markdown-wysiwyg-editor";
 import { useEffect, useMemo, useState } from "react";
 import {
+	agenticSearch,
 	type Artifact,
+	type AgenticSearchResult,
 	type ChatCompletionResult,
 	type ConversationItem,
 	type ConversationMessage,
 	type RetrievedFragment,
 	type RetrievalLog,
 	type SourceHealth,
+	type WebSearchResult,
 	fetchConversationMessages,
 	fetchConversations,
 	fetchRetrievalLogs,
 	fetchSourceCategories,
 	fetchSourceHealth,
+	fetchSourcePage,
+	fetchSystemContext,
 	searchFragments,
 	sendChat,
+	updateSystemContext,
 } from "./api";
+import {
+	dedupeAgenticSourceCitations,
+	normalizeAgenticAnswerMarkdown,
+	toAgenticSourceKey,
+	toAgenticSourceLabel,
+} from "./agentic-markdown";
 import { KnowledgeWorkspace } from "./knowledge-workspace";
+
+mermaid.initialize({ startOnLoad: false });
 
 type TabId = "knowledge" | "chat" | "search" | "settings";
 
@@ -74,6 +92,12 @@ const toResultTitle = (item: RetrievedFragment): string =>
 	item.heading && item.heading.trim().length > 0
 		? item.heading
 		: item.sourceUri;
+
+const toWebSearchLabel = (provider: string | null | undefined): string => {
+	if (provider === "exa") return "Exa Search";
+	if (provider === "brave") return "Brave Search";
+	return "Web Search";
+};
 
 type RetrievalLogContextSummary = {
 	retrievalStrategy?: string;
@@ -137,12 +161,41 @@ export function App() {
 		selectedResults: RetrievedFragment[];
 		vectorResults: RetrievedFragment[];
 		textResults: RetrievedFragment[];
+		webResults: WebSearchResult[];
+		webSearch: {
+			available: boolean;
+			provider: string | null;
+			message: string | null;
+			unavailableMessage: string | null;
+		};
 		mergedResults: RetrievedFragment[];
 	} | null>(null);
+	const [agenticResult, setAgenticResult] =
+		useState<AgenticSearchResult | null>(null);
+	const [agenticCitationTitleBySlug, setAgenticCitationTitleBySlug] = useState<
+		Record<string, string>
+	>({});
+	const [systemContextText, setSystemContextText] = useState("");
+	const [systemContextUpdatedAt, setSystemContextUpdatedAt] = useState<
+		string | null
+	>(null);
+	const [systemContextSaving, setSystemContextSaving] = useState(false);
 
 	const conversationArtifacts = useMemo(
 		() => chatMessages.flatMap((message) => message.artifacts ?? []),
 		[chatMessages],
+	);
+	const agenticSourceCitations = useMemo(
+		() =>
+			agenticResult
+				? dedupeAgenticSourceCitations(agenticResult.citations)
+				: [],
+		[agenticResult],
+	);
+	const agenticAnswerMarkdown = useMemo(
+		() =>
+			agenticResult ? normalizeAgenticAnswerMarkdown(agenticResult.answer) : "",
+		[agenticResult],
 	);
 
 	const loadHealth = async () => {
@@ -182,6 +235,12 @@ export function App() {
 		setRetrievalLogs(logs);
 	};
 
+	const loadSystemContext = async () => {
+		const settings = await fetchSystemContext();
+		setSystemContextText(settings.systemContext);
+		setSystemContextUpdatedAt(settings.updatedAt);
+	};
+
 	// biome-ignore lint/correctness/useExhaustiveDependencies: initial load
 	useEffect(() => {
 		void (async () => {
@@ -191,6 +250,7 @@ export function App() {
 					loadHealth(),
 					loadConversations(),
 					loadCategories(),
+					loadSystemContext(),
 				]);
 			} catch (error) {
 				setErrorText(
@@ -199,6 +259,50 @@ export function App() {
 			}
 		})();
 	}, []);
+
+	useEffect(() => {
+		if (!agenticResult) {
+			setAgenticCitationTitleBySlug({});
+			return;
+		}
+
+		const wikiSlugs = Array.from(
+			new Set(
+				agenticResult.citations
+					.map((citation) => citation.wikiSlug)
+					.filter((slug): slug is string => Boolean(slug)),
+			),
+		);
+		if (wikiSlugs.length === 0) {
+			setAgenticCitationTitleBySlug({});
+			return;
+		}
+
+		let cancelled = false;
+		void (async () => {
+			const pages = await Promise.allSettled(
+				wikiSlugs.map(async (slug) => ({
+					slug,
+					page: await fetchSourcePage(slug),
+				})),
+			);
+			if (cancelled) return;
+
+			const titleBySlug: Record<string, string> = {};
+			for (const result of pages) {
+				if (result.status !== "fulfilled") continue;
+				const title = result.value.page.title.trim();
+				if (title) {
+					titleBySlug[result.value.slug] = title;
+				}
+			}
+			setAgenticCitationTitleBySlug(titleBySlug);
+		})();
+
+		return () => {
+			cancelled = true;
+		};
+	}, [agenticResult]);
 
 	const withBusy = async (task: () => Promise<void>) => {
 		setBusy(true);
@@ -244,6 +348,7 @@ export function App() {
 
 	const handleSearchFragments = async () => {
 		const query = searchQuery.trim();
+		setAgenticResult(null);
 		if (!query) {
 			setSearchResults(null);
 			return;
@@ -259,9 +364,56 @@ export function App() {
 				selectedResults: response.selectedResults,
 				vectorResults: response.vectorResults,
 				textResults: response.textResults,
+				webResults: response.webResults,
+				webSearch: response.webSearch,
 				mergedResults: response.mergedResults,
 			});
 		});
+	};
+
+	const handleAgenticSearch = async () => {
+		const query = searchQuery.trim();
+		setSearchResults(null);
+		if (!query) {
+			setAgenticResult(null);
+			return;
+		}
+		await withBusy(async () => {
+			const response = await agenticSearch({
+				query,
+				topK: 8,
+				category: searchCategory === "all" ? undefined : searchCategory,
+			});
+			setAgenticResult(response);
+		});
+	};
+
+	const handleSaveSystemContext = async () => {
+		setSystemContextSaving(true);
+		setErrorText(null);
+		try {
+			const updated = await updateSystemContext(systemContextText);
+			setSystemContextText(updated.systemContext);
+			setSystemContextUpdatedAt(updated.updatedAt);
+		} catch (error) {
+			setErrorText(
+				error instanceof Error ? error.message : "Failed to save settings.",
+			);
+		} finally {
+			setSystemContextSaving(false);
+		}
+	};
+
+	const handleSearchCategoryChange = (value: string) => {
+		setSearchCategory(value);
+		setSearchResults(null);
+		setAgenticResult(null);
+	};
+
+	const handleSearchQueryChange = (value: string) => {
+		setSearchQuery(value);
+		setSearchResults(null);
+		setAgenticResult(null);
 	};
 
 	const openKnowledgeFromSearch = (slug: string | null | undefined) => {
@@ -312,6 +464,9 @@ export function App() {
 						{secondaryLabel}={formatScore(secondaryScore)}
 					</span>
 					<span>combined={formatScore(item.combinedScore)}</span>
+					{item.sourceHitCount && item.sourceHitCount > 1 ? (
+						<span>chunks={item.sourceHitCount}</span>
+					) : null}
 				</div>
 				<div className="google-result-links">
 					{item.wikiSlug ? (
@@ -339,6 +494,40 @@ export function App() {
 					) : (
 						<span className="google-link-disabled">doc: unavailable</span>
 					)}
+				</div>
+			</article>
+		);
+	};
+
+	const renderWebSearchResult = (item: WebSearchResult) => {
+		const title = item.title || item.url;
+		return (
+			<article className="google-result">
+				<div className="google-result-attribution">
+					<span className="google-result-category">web</span>
+					<span className="google-result-uri">{item.url}</span>
+					<span className="google-result-locator">#{item.position}</span>
+				</div>
+				<h4>
+					<a
+						href={item.url}
+						target="_blank"
+						rel="noreferrer"
+						className="google-result-title-anchor"
+					>
+						{title}
+					</a>
+				</h4>
+				<p>{item.snippet || "(no snippet)"}</p>
+				<div className="google-result-links">
+					<a
+						href={item.url}
+						target="_blank"
+						rel="noreferrer"
+						className="google-link-anchor"
+					>
+						open
+					</a>
 				</div>
 			</article>
 		);
@@ -424,7 +613,21 @@ export function App() {
 									className={`message message-${message.role}`}
 								>
 									<header>{message.role}</header>
-									<p>{message.content}</p>
+									{message.role === "assistant" ? (
+										<div className="chat-markdown-viewer">
+											<MarkdownEditor
+												value={normalizeAgenticAnswerMarkdown(message.content)}
+												editable={false}
+												enableMermaid={true}
+												mermaidLib={mermaid}
+												toolbarMode="hidden"
+												autoHeight={true}
+												className="wysiwyg-viewer"
+											/>
+										</div>
+									) : (
+										<p>{message.content}</p>
+									)}
 								</article>
 							))}
 						</div>
@@ -524,7 +727,9 @@ export function App() {
 						<div className="search-row-advanced">
 							<select
 								value={searchCategory}
-								onChange={(event) => setSearchCategory(event.target.value)}
+								onChange={(event) =>
+									handleSearchCategoryChange(event.target.value)
+								}
 								className="search-select"
 							>
 								<option value="all">All categories</option>
@@ -537,14 +742,11 @@ export function App() {
 							<div className="search-input-wrapper">
 								<input
 									value={searchQuery}
-									onChange={(event) => setSearchQuery(event.target.value)}
+									onChange={(event) =>
+										handleSearchQueryChange(event.target.value)
+									}
 									placeholder="Search knowledge fragments..."
 									className="search-input"
-									onKeyDown={(event) => {
-										if (event.key === "Enter") {
-											void handleSearchFragments();
-										}
-									}}
 								/>
 							</div>
 							<button
@@ -556,14 +758,108 @@ export function App() {
 								<Search className="icon" />
 								<span>Search</span>
 							</button>
+							<button
+								type="button"
+								className="search-btn btn-agentic"
+								onClick={handleAgenticSearch}
+								disabled={busy}
+							>
+								<Sparkles className="icon" />
+								<span>Agentic Search</span>
+							</button>
 						</div>
 						<div className="list search-list">
+							{agenticResult ? (
+								<section className="artifact-row">
+									<header>
+										<strong>Agentic Answer</strong>
+										<small>{agenticResult.query}</small>
+									</header>
+									<div className="agentic-answer-viewer">
+										<MarkdownEditor
+											value={agenticAnswerMarkdown}
+											editable={false}
+											enableMermaid={true}
+											mermaidLib={mermaid}
+											toolbarMode="hidden"
+											autoHeight={true}
+											className="wysiwyg-viewer"
+										/>
+									</div>
+									<div className="search-results-summary">
+										<span>sources={agenticSourceCitations.length}</span>
+										<span>toolCalls={agenticResult.toolTrace.length}</span>
+										{agenticResult.usage ? (
+											<span>tokens={agenticResult.usage.totalTokens}</span>
+										) : null}
+									</div>
+									{agenticSourceCitations.length > 0 ? (
+										<ul className="citation-list">
+											{agenticSourceCitations.map((citation) => {
+												const key = toAgenticSourceKey(citation);
+												const label = citation.wikiSlug
+													? (agenticCitationTitleBySlug[citation.wikiSlug] ??
+														toAgenticSourceLabel(citation))
+													: toAgenticSourceLabel(citation);
+												return (
+													<li key={key}>
+														{citation.wikiSlug ? (
+															<button
+																type="button"
+																className="google-link-btn"
+																onClick={() =>
+																	openKnowledgeFromSearch(citation.wikiSlug)
+																}
+															>
+																{label}
+															</button>
+														) : citation.url ? (
+															<a
+																href={citation.url}
+																target="_blank"
+																rel="noreferrer"
+																className="google-link-anchor"
+															>
+																{label}
+															</a>
+														) : (
+															<span>{label}</span>
+														)}
+													</li>
+												);
+											})}
+										</ul>
+									) : null}
+									{agenticResult.toolTrace.length > 0 ? (
+										<div className="list compact">
+											{agenticResult.toolTrace.map((trace, index) => (
+												<div
+													key={`${trace.tool}-${index}`}
+													className="list-item"
+												>
+													<div>
+														{trace.tool} ({trace.status})
+													</div>
+													<small>
+														elapsed={trace.elapsedMs}ms results=
+														{trace.resultCount ?? "-"}
+													</small>
+													{trace.message ? (
+														<small>{trace.message}</small>
+													) : null}
+												</div>
+											))}
+										</div>
+									) : null}
+								</section>
+							) : null}
 							{searchResults ? (
 								<div className="search-results-grid">
 									<div className="search-results-summary">
 										<span>strategy={searchResults.strategy}</span>
 										<span>selected={searchResults.selectedResults.length}</span>
 										<span>merged={searchResults.mergedResults.length}</span>
+										<span>web={searchResults.webResults.length}</span>
 									</div>
 									<section className="search-results-column">
 										<header className="search-results-column-header">
@@ -599,11 +895,40 @@ export function App() {
 											)}
 										</div>
 									</section>
+									<section className="search-results-column">
+										<header className="search-results-column-header">
+											<h3>
+												{toWebSearchLabel(searchResults.webSearch.provider)}
+											</h3>
+											<small>{searchResults.webResults.length} hits</small>
+										</header>
+										<div className="search-results-column-list">
+											{searchResults.webResults.length > 0 ? (
+												searchResults.webResults.map((item) => (
+													<div key={`web-${item.url}`}>
+														{renderWebSearchResult(item)}
+													</div>
+												))
+											) : (
+												<div className="tree-info">
+													{searchResults.webSearch.available
+														? (searchResults.webSearch.message ??
+															`No ${toWebSearchLabel(
+																searchResults.webSearch.provider,
+															)} hits.`)
+														: (searchResults.webSearch.unavailableMessage ??
+															`${toWebSearchLabel(
+																searchResults.webSearch.provider,
+															)} is not configured.`)}
+												</div>
+											)}
+										</div>
+									</section>
 								</div>
 							) : (
 								<div className="tree-info">
-									Run search to compare full-text and vector results side by
-									side.
+									Run search to compare full-text, vector, and web search
+									results side by side.
 								</div>
 							)}
 						</div>
@@ -640,6 +965,36 @@ export function App() {
 							<div>
 								<BookOpen />
 								<span>{sourceHealth?.git?.commit ?? "-"}</span>
+							</div>
+						</div>
+					</section>
+					<section className="panel">
+						<div className="panel-header">
+							<h2>System Context</h2>
+						</div>
+						<div className="form-stack">
+							<label htmlFor="system-context-input">
+								Agentic Search Prompt
+							</label>
+							<textarea
+								id="system-context-input"
+								value={systemContextText}
+								onChange={(event) => setSystemContextText(event.target.value)}
+								placeholder="System context for this user..."
+							/>
+							<div className="actions">
+								<button
+									type="button"
+									className="search-btn btn-primary"
+									onClick={() => void handleSaveSystemContext()}
+									disabled={systemContextSaving}
+								>
+									<Brain className="icon" />
+									<span>Save</span>
+								</button>
+								<small>
+									updated: {formatDateTime(systemContextUpdatedAt ?? undefined)}
+								</small>
 							</div>
 						</div>
 					</section>

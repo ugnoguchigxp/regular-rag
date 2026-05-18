@@ -12,10 +12,11 @@ import type { LlmProvider } from "../../providers/types";
 import type { ChatMessage } from "../../types/llm";
 import { extractArtifactsFromText } from "../artifacts/extract";
 import type { Artifact } from "../artifacts/types";
-import {
-	evaluateRetrieverCompat,
-	type SourceRetriever,
-} from "../rag/retriever";
+import type {
+	EvidenceWebResult,
+	SearchEvidence,
+	SearchEvidenceCollector,
+} from "../rag/search-evidence";
 import type { Citation, RetrievedFragment } from "../rag/types";
 
 export type ChatResult = {
@@ -25,6 +26,7 @@ export type ChatResult = {
 	citations: Citation[];
 	artifacts: Artifact[];
 	retrieved: RetrievedFragment[];
+	webResults?: EvidenceWebResult[];
 	usage?: {
 		promptTokens: number;
 		completionTokens: number;
@@ -34,8 +36,8 @@ export type ChatResult = {
 
 type ChatServiceDeps = {
 	db: NodePgDatabase<typeof schema>;
-	retriever: SourceRetriever;
 	llmProvider: LlmProvider;
+	evidenceCollector: SearchEvidenceCollector;
 };
 
 type ChatRequest = {
@@ -45,38 +47,68 @@ type ChatRequest = {
 	category?: string;
 };
 
-function toCitations(retrieved: RetrievedFragment[]): Citation[] {
-	return retrieved.map((item) => ({
-		sourceId: item.sourceId,
-		fragmentId: item.id,
-		uri: item.sourceUri,
-		category: item.sourceCategory,
-		title: item.heading ?? item.sourceUri.split("/").at(-1) ?? "Untitled",
-		heading: item.heading ?? undefined,
-		locator: item.locator,
-		score: item.combinedScore,
-	}));
-}
-
-function buildContext(retrieved: RetrievedFragment[]): string {
-	if (retrieved.length === 0) {
-		return "(no local markdown context found)";
-	}
-	return retrieved
-		.map(
-			(item, index) =>
-				`[${index + 1}] uri=${item.sourceUri} locator=${item.locator} heading=${item.heading ?? "(none)"}\n${item.content}`,
-		)
-		.join("\n\n");
-}
-
-function buildSystemPrompt(context: string): string {
+function buildSystemPrompt(localContext: string, webContext: string): string {
 	return [
 		"You are a helpful assistant.",
-		"Use the provided context and cite uncertain points conservatively.",
+		"Use the provided local markdown context and web search context when they are relevant.",
+		"Decide which evidence to rely on. Prefer local markdown for workspace facts and web evidence for public or current facts.",
+		"If web snippets are weaker than local context, do not force them into the answer.",
+		"Cite uncertain points conservatively.",
 		'If you generate structured output, use <artifact type="..."> blocks.',
-		`Context:\n${context}`,
+		`Local markdown context:\n${localContext}`,
+		`Web search context:\n${webContext}`,
 	].join("\n\n");
+}
+
+type ChatSearchDecision = {
+	shouldSearch: boolean;
+	searchQuery?: string;
+	answer?: string;
+};
+
+function extractJsonObject(input: string): string | null {
+	const fenced = input.match(/```(?:json)?\s*([\s\S]*?)```/i);
+	const candidate = fenced?.[1] ?? input;
+	const start = candidate.indexOf("{");
+	const end = candidate.lastIndexOf("}");
+	if (start < 0 || end < start) return null;
+	return candidate.slice(start, end + 1);
+}
+
+function parseSearchDecision(input: string): ChatSearchDecision | null {
+	const json = extractJsonObject(input);
+	if (!json) return null;
+	try {
+		const parsed = JSON.parse(json) as Record<string, unknown>;
+		return {
+			shouldSearch: parsed.shouldSearch === true,
+			searchQuery:
+				typeof parsed.searchQuery === "string" ? parsed.searchQuery : undefined,
+			answer: typeof parsed.answer === "string" ? parsed.answer : undefined,
+		};
+	} catch {
+		return null;
+	}
+}
+
+function buildSearchDecisionPrompt(): string {
+	return [
+		"You decide whether search is required before answering.",
+		"Do not search by default.",
+		"If you can answer sufficiently from your own general knowledge, return JSON with shouldSearch=false and a complete Markdown answer.",
+		"Search is required for local workspace/wiki/project-specific facts, current or time-sensitive facts, explicit search requests, citations, or when you are uncertain.",
+		"If search is required, choose one concise searchQuery. The same query will be used for full-text search, vector search, and web search.",
+		'Return only JSON: {"shouldSearch":false,"answer":"..."} or {"shouldSearch":true,"searchQuery":"..."}',
+	].join("\n");
+}
+
+function buildDirectAnswerPrompt(): string {
+	return [
+		"You are a helpful assistant.",
+		"Answer directly in Markdown without using retrieved context.",
+		"If the user asks for current, local workspace, or source-grounded facts that require search, say that search is required instead of guessing.",
+		'If you generate structured output, use <artifact type="..."> blocks.',
+	].join("\n");
 }
 
 function conversationTitleFromQuery(query: string): string {
@@ -109,31 +141,64 @@ export class ChatService {
 		return inserted.id;
 	}
 
+	private async decideSearch(
+		messages: ChatMessage[],
+	): Promise<ChatSearchDecision> {
+		const response = await this.deps.llmProvider.chatCompletion(
+			[{ role: "system", content: buildSearchDecisionPrompt() }, ...messages],
+			{ temperature: 0 },
+		);
+		const decision = parseSearchDecision(response.content);
+		if (decision) return decision;
+		return {
+			shouldSearch: false,
+			answer: response.content,
+		};
+	}
+
+	private async directAnswer(messages: ChatMessage[]) {
+		return await this.deps.llmProvider.chatCompletion([
+			{ role: "system", content: buildDirectAnswerPrompt() },
+			...messages,
+		]);
+	}
+
 	async run(request: ChatRequest): Promise<ChatResult> {
 		const lastUserMessage =
 			[...request.messages].reverse().find((message) => message.role === "user")
 				?.content ?? "";
 		const topK = request.topK ?? 8;
 		const category = request.category?.trim() || undefined;
-		const evaluation = await evaluateRetrieverCompat(
-			this.deps.retriever,
-			lastUserMessage,
-			{
+		const decision = await this.decideSearch(request.messages);
+		let evidence: SearchEvidence | undefined;
+		let llmResponse: Awaited<ReturnType<LlmProvider["chatCompletion"]>>;
+		if (decision.shouldSearch) {
+			const searchQuery = decision.searchQuery?.trim() || lastUserMessage;
+			evidence = await this.deps.evidenceCollector.collect({
+				query: searchQuery,
 				topK,
-				enableTrigramFallback: true,
 				category,
-			},
-		);
-		const retrieved = evaluation.selectedResults;
-		const citations = toCitations(retrieved);
-		const context = buildContext(retrieved);
-		const systemPrompt = buildSystemPrompt(context);
-
-		const llmResponse = await this.deps.llmProvider.chatCompletion([
-			{ role: "system", content: systemPrompt },
-			...request.messages,
-		]);
+			});
+			const systemPrompt = buildSystemPrompt(
+				evidence.localContext,
+				evidence.webContext,
+			);
+			llmResponse = await this.deps.llmProvider.chatCompletion([
+				{ role: "system", content: systemPrompt },
+				...request.messages,
+			]);
+		} else if (decision.answer?.trim()) {
+			llmResponse = {
+				id: randomUUID(),
+				content: decision.answer,
+			};
+		} else {
+			llmResponse = await this.directAnswer(request.messages);
+		}
 		const extracted = extractArtifactsFromText(llmResponse.content);
+		const retrieved = evidence?.retrieved ?? [];
+		const citations = evidence?.citations ?? [];
+		const webResults = evidence?.webResults ?? [];
 
 		const conversationId = await this.ensureConversation(
 			request.conversationId,
@@ -191,15 +256,15 @@ export class ChatService {
 					textScore: item.textScore,
 					trigramScore: item.trigramScore,
 				})),
-				vector: evaluation.vectorResults.map((item) => ({
+				vector: (evidence?.evaluation.vectorResults ?? []).map((item) => ({
 					id: item.id,
 					vectorScore: item.vectorScore,
 				})),
-				text: evaluation.textResults.map((item) => ({
+				text: (evidence?.evaluation.textResults ?? []).map((item) => ({
 					id: item.id,
 					textScore: item.textScore,
 				})),
-				merged: evaluation.mergedResults.map((item) => ({
+				merged: (evidence?.evaluation.mergedResults ?? []).map((item) => ({
 					id: item.id,
 					combinedScore: item.combinedScore,
 					vectorScore: item.vectorScore,
@@ -208,13 +273,16 @@ export class ChatService {
 			},
 			context: {
 				userMessageId,
-				contextLength: context.length,
+				searchUsed: Boolean(evidence),
+				searchQuery: evidence?.query ?? null,
+				contextLength: evidence?.localContext.length ?? 0,
 				category: category ?? "all",
-				retrievalStrategy: evaluation.strategy,
+				retrievalStrategy: evidence?.evaluation.strategy ?? null,
 				selectedCount: retrieved.length,
-				vectorCount: evaluation.vectorResults.length,
-				textCount: evaluation.textResults.length,
-				mergedCount: evaluation.mergedResults.length,
+				vectorCount: evidence?.evaluation.vectorResults.length ?? 0,
+				textCount: evidence?.evaluation.textResults.length ?? 0,
+				mergedCount: evidence?.evaluation.mergedResults.length ?? 0,
+				webCount: webResults.length,
 			},
 		});
 
@@ -230,6 +298,7 @@ export class ChatService {
 			citations,
 			artifacts: extracted.artifacts,
 			retrieved,
+			webResults: webResults.length > 0 ? webResults : undefined,
 			usage: llmResponse.usage,
 		};
 	}

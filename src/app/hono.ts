@@ -7,13 +7,28 @@ import { logger } from "hono/logger";
 import type { DbConnection } from "../db";
 import { createDbConnection } from "../db";
 import { SourceRetriever } from "../modules/rag/retriever";
+import { AgenticSearchService } from "../modules/agentic-search/agentic-search.service";
+import { OpenAiResponsesAdapter } from "../modules/agentic-search/llm/openai-responses-adapter";
+import { AgenticSearchRunner } from "../modules/agentic-search/runner";
+import { AgenticToolRegistry } from "../modules/agentic-search/tools/registry";
+import type { AgenticSearchResult } from "../modules/agentic-search/types";
+import { SearchEvidenceCollector } from "../modules/rag/search-evidence";
+import { SettingsRepository } from "../modules/settings/settings.repository";
 import { SourceRepository } from "../modules/sources/source.repository";
+import { readPage } from "../modules/sources/wiki/content-repo";
 import { AzureOpenAiProvider } from "../providers/AzureOpenAiProvider";
-import type { EmbeddingProvider, LlmProvider } from "../providers/types";
+import type {
+	EmbeddingProvider,
+	LlmProvider,
+	WebSearchProvider,
+} from "../providers/types";
+import { createConfiguredWebSearchProvider } from "../providers/webSearchProviderFactory";
+import { createAgenticSearchRoute } from "../routes/agentic-search.route";
 import { createArtifactsRoute } from "../routes/artifacts.route";
 import { createChatRoute } from "../routes/chat.route";
 import { createHealthRoute } from "../routes/health.route";
 import { createSearchRoute } from "../routes/search.route";
+import { createSettingsRoute } from "../routes/settings.route";
 import { createSourcesRoute } from "../routes/sources.route";
 import { readAppEnv, type AppEnv } from "./env";
 
@@ -22,9 +37,39 @@ type AppRuntime = {
 	dbConnection: DbConnection;
 	llmProvider: LlmProvider;
 	embeddingProvider: EmbeddingProvider;
+	webSearchProvider?: WebSearchProvider;
+	webSearchProviderName: string | null;
+	webSearchUnavailableMessage: string | null;
 	sourceRepository: SourceRepository;
 	retriever: SourceRetriever;
+	evidenceCollector: SearchEvidenceCollector;
+	settingsRepository: SettingsRepository;
+	agenticSearchService: {
+		run(input: {
+			query: string;
+			topK: number;
+			category?: string;
+		}): Promise<AgenticSearchResult>;
+	};
 };
+
+function createAgenticLogger(debug: boolean) {
+	return (params: {
+		level: "info" | "debug" | "warn" | "error";
+		event: string;
+		data?: Record<string, unknown>;
+	}) => {
+		if (params.level === "debug" && !debug) return;
+		const line = `[agentic-search][${params.level}] ${params.event}${
+			params.data ? ` ${JSON.stringify(params.data)}` : ""
+		}`;
+		if (params.level === "error") {
+			console.error(line);
+			return;
+		}
+		console.log(line);
+	};
+}
 
 class UnconfiguredProvider implements LlmProvider, EmbeddingProvider {
 	constructor(private readonly reason: string) {}
@@ -38,8 +83,51 @@ class UnconfiguredProvider implements LlmProvider, EmbeddingProvider {
 	}
 }
 
+class UnconfiguredAgenticSearchService {
+	readonly __unconfigured = true;
+
+	constructor(private readonly reason: string) {}
+
+	async run(): Promise<never> {
+		throw new Error(this.reason);
+	}
+}
+
 declare global {
-	var __regularRagRuntime__: Promise<AppRuntime> | undefined;
+	var __regularRagRuntime__: Promise<unknown> | undefined;
+}
+
+function isRuntimeShape(value: unknown): value is AppRuntime {
+	if (!value || typeof value !== "object") return false;
+	const obj = value as Record<string, unknown>;
+	const settingsRepo = obj.settingsRepository as
+		| Record<string, unknown>
+		| undefined;
+	const agenticService = obj.agenticSearchService as
+		| Record<string, unknown>
+		| undefined;
+	return (
+		Boolean(obj.env) &&
+		Boolean(obj.dbConnection) &&
+		Boolean(obj.llmProvider) &&
+		Boolean(obj.embeddingProvider) &&
+		Object.hasOwn(obj, "webSearchProviderName") &&
+		Object.hasOwn(obj, "webSearchUnavailableMessage") &&
+		Boolean(obj.sourceRepository) &&
+		Boolean(obj.retriever) &&
+		Boolean(obj.evidenceCollector) &&
+		Boolean(obj.settingsRepository) &&
+		typeof settingsRepo?.getSystemContext === "function" &&
+		typeof settingsRepo?.updateSystemContext === "function" &&
+		Boolean(obj.agenticSearchService) &&
+		typeof agenticService?.run === "function"
+	);
+}
+
+function isUnconfiguredAgenticService(value: unknown): boolean {
+	if (!value || typeof value !== "object") return false;
+	const obj = value as Record<string, unknown>;
+	return obj.__unconfigured === true;
 }
 
 async function createRuntime(): Promise<AppRuntime> {
@@ -59,14 +147,86 @@ async function createRuntime(): Promise<AppRuntime> {
 
 	const sourceRepository = new SourceRepository(dbConnection.db, provider);
 	const retriever = new SourceRetriever(sourceRepository, provider);
+	const configuredWebSearch = createConfiguredWebSearchProvider(env);
+	const evidenceCollector = new SearchEvidenceCollector({
+		retriever,
+		webSearchProvider: configuredWebSearch.provider,
+	});
+	const settingsRepository = new SettingsRepository(dbConnection.db);
+
+	const agenticLogger = createAgenticLogger(env.openAiAgenticSearchDebug);
+	const agenticDisabledReason = !env.openAiApiKey
+		? "Agentic search requires OPENAI_API_KEY, or AZURE_OPENAI_API_KEY with AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_DEPLOYMENT."
+		: env.openAiCredentialSource === "azure" && !env.openAiBaseUrl
+			? "AZURE_OPENAI_ENDPOINT (or OPENAI_BASE_URL) is required when using AZURE_OPENAI_API_KEY for Agentic search."
+			: null;
+	const openAiApiKey = env.openAiApiKey;
+
+	const agenticSearchService = !agenticDisabledReason
+		? (() => {
+				if (!openAiApiKey) {
+					throw new Error("openAiApiKey is required for Agentic search.");
+				}
+				const llmAdapter = new OpenAiResponsesAdapter({
+					apiKey: openAiApiKey,
+					baseUrl: env.openAiBaseUrl,
+					apiVersion: env.openAiApiVersion,
+					model: env.openAiAgenticSearchModel,
+					debug: env.openAiAgenticSearchDebug,
+					log: agenticLogger,
+				});
+				const llmDiagnostics = llmAdapter.getDiagnostics();
+				agenticLogger({
+					level: "info",
+					event: "runtime.adapter_config",
+					data: {
+						...llmDiagnostics,
+						credentialSource: env.openAiCredentialSource,
+					},
+				});
+				const toolRegistry = new AgenticToolRegistry({
+					sourceRepository,
+					createEmbedding: (input) => provider.createEmbedding(input),
+					readWikiPage: (slug) => readPage(env.contentRoot, slug),
+					evidenceCollector,
+					webSearchProvider: configuredWebSearch.provider,
+					webSearchUnavailableMessage:
+						configuredWebSearch.unavailableMessage ?? undefined,
+					maxContextChars: env.openAiAgenticSearchMaxContextChars,
+				});
+				const runner = new AgenticSearchRunner({
+					llmAdapter,
+					toolRegistry,
+					options: {
+						maxToolCalls: env.openAiAgenticSearchMaxToolCalls,
+						maxFetchCalls: env.openAiAgenticSearchMaxFetchCalls,
+						maxContextChars: env.openAiAgenticSearchMaxContextChars,
+					},
+					debug: env.openAiAgenticSearchDebug,
+					log: agenticLogger,
+				});
+				return new AgenticSearchService({
+					settingsRepository,
+					runner,
+					debug: env.openAiAgenticSearchDebug,
+					log: agenticLogger,
+				});
+			})()
+		: new UnconfiguredAgenticSearchService(agenticDisabledReason);
 
 	return {
 		env,
 		dbConnection,
 		llmProvider: provider,
 		embeddingProvider: provider,
+		webSearchProvider: configuredWebSearch.provider,
+		webSearchProviderName: configuredWebSearch.providerName,
+		webSearchUnavailableMessage: configuredWebSearch.unavailableMessage,
 		sourceRepository,
 		retriever,
+		evidenceCollector,
+		settingsRepository,
+		agenticSearchService,
 	};
 }
 
@@ -77,7 +237,32 @@ export async function getAppRuntime(): Promise<AppRuntime> {
 			throw error;
 		});
 	}
-	return globalThis.__regularRagRuntime__;
+	let runtimeValue = await globalThis.__regularRagRuntime__;
+	if (!isRuntimeShape(runtimeValue)) {
+		globalThis.__regularRagRuntime__ = createRuntime().catch((error) => {
+			globalThis.__regularRagRuntime__ = undefined;
+			throw error;
+		});
+		runtimeValue = await globalThis.__regularRagRuntime__;
+	}
+	if (!isRuntimeShape(runtimeValue)) {
+		throw new Error("App runtime bootstrap failed: invalid runtime shape.");
+	}
+	if (
+		isUnconfiguredAgenticService(runtimeValue.agenticSearchService) &&
+		readAppEnv().openAiApiKey
+	) {
+		globalThis.__regularRagRuntime__ = createRuntime().catch((error) => {
+			globalThis.__regularRagRuntime__ = undefined;
+			throw error;
+		});
+		const refreshed = await globalThis.__regularRagRuntime__;
+		if (!isRuntimeShape(refreshed)) {
+			throw new Error("App runtime bootstrap failed after refresh.");
+		}
+		return refreshed;
+	}
+	return runtimeValue;
 }
 
 const runtime = await getAppRuntime();
@@ -119,13 +304,33 @@ app.route(
 		sourceRepository: runtime.sourceRepository,
 	}),
 );
-app.route("/api/search", createSearchRoute({ retriever: runtime.retriever }));
+app.route(
+	"/api/search",
+	createSearchRoute({
+		retriever: runtime.retriever,
+		webSearchProvider: runtime.webSearchProvider,
+		webSearchProviderName: runtime.webSearchProviderName,
+		webSearchUnavailableMessage: runtime.webSearchUnavailableMessage,
+	}),
+);
+app.route(
+	"/api/settings",
+	createSettingsRoute({
+		settingsRepository: runtime.settingsRepository,
+	}),
+);
+app.route(
+	"/api/agentic-search",
+	createAgenticSearchRoute({
+		service: runtime.agenticSearchService,
+	}),
+);
 app.route(
 	"/api/chat",
 	createChatRoute({
 		db: runtime.dbConnection.db,
-		retriever: runtime.retriever,
 		llmProvider: runtime.llmProvider,
+		evidenceCollector: runtime.evidenceCollector,
 	}),
 );
 app.route(

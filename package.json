@@ -39,6 +39,7 @@
     "wiki:index:fts": "bun run src/cli/wiki-index.ts --phase=fts",
     "wiki:index:embed": "bun run src/cli/wiki-index.ts --phase=embed",
     "wiki:index:all": "bun run src/cli/wiki-index.ts --phase=all",
+    "agentic:smoke": "bun run src/cli/agentic-search-smoke.ts",
     "wiki:register:missing-slugs": "bun run src/cli/wiki-register-missing-slugs.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "bun run src/cli/migrate.ts",

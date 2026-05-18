@@ -20,6 +20,8 @@ type BraveSearchResponse = {
  * Brave Search API プロバイダー
  */
 export class BraveSearchProvider implements WebSearchProvider {
+	readonly name = "brave";
+
 	private readonly baseURL = "https://api.search.brave.com/res/v1";
 	private readonly apiKey: string;
 	private readonly timeout = 10000;

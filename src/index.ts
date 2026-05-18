@@ -8,8 +8,10 @@ export * from "./db";
 export * from "./db/schema";
 export * from "./providers/AzureOpenAiProvider";
 export * from "./providers/BraveSearchProvider";
+export * from "./providers/ExaSearchProvider";
 // Providers
 export * from "./providers/types";
+export * from "./providers/webSearchProviderFactory";
 // Repositories
 export * from "./repositories/CacheRepository";
 export * from "./repositories/KnowledgeGraphRepository";

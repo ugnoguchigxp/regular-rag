@@ -34,6 +34,11 @@ export type SourceHealth = {
 	} | null;
 };
 
+export type SystemContextResponse = {
+	systemContext: string;
+	updatedAt: string;
+};
+
 export type SourceMutationResponse = {
 	ok: true;
 	slug?: string;
@@ -82,7 +87,47 @@ export type RetrievedFragment = {
 	vectorScore?: number;
 	textScore?: number;
 	trigramScore?: number;
+	sourceHitCount?: number;
 	combinedScore: number;
+};
+
+export type WebSearchResult = {
+	title: string;
+	url: string;
+	snippet: string;
+	position: number;
+	content?: string;
+};
+
+export type AgenticSearchCitation = {
+	kind: "wiki_fragment" | "wiki_page" | "web_search_result" | "web_page";
+	title: string;
+	uri?: string;
+	url?: string;
+	locator?: string;
+	wikiSlug?: string | null;
+};
+
+export type AgenticToolTrace = {
+	tool: string;
+	status: "ok" | "error" | "skipped";
+	elapsedMs: number;
+	resultCount?: number;
+	message?: string;
+};
+
+export type AgenticSearchResult = {
+	query: string;
+	answer: string;
+	citations: AgenticSearchCitation[];
+	toolTrace: AgenticToolTrace[];
+	retrieved?: RetrievedFragment[];
+	webResults?: WebSearchResult[];
+	usage?: {
+		inputTokens: number;
+		outputTokens: number;
+		totalTokens: number;
+	};
 };
 
 export type Artifact = {
@@ -101,6 +146,7 @@ export type ChatCompletionResult = {
 	citations: Citation[];
 	artifacts: Artifact[];
 	retrieved: RetrievedFragment[];
+	webResults?: WebSearchResult[];
 	usage?: {
 		promptTokens: number;
 		completionTokens: number;
@@ -199,6 +245,19 @@ export async function fetchSourceCategories(): Promise<string[]> {
 
 export async function fetchSourceHealth(): Promise<SourceHealth> {
 	return requestJson("/api/sources/health");
+}
+
+export async function fetchSystemContext(): Promise<SystemContextResponse> {
+	return requestJson("/api/settings/system-context");
+}
+
+export async function updateSystemContext(
+	systemContext: string,
+): Promise<SystemContextResponse> {
+	return requestJson("/api/settings/system-context", {
+		method: "PUT",
+		body: { systemContext },
+	});
 }
 
 export async function searchSourcePages(
@@ -360,10 +419,28 @@ export async function searchFragments(params: {
 	strategy: "merged" | "text_fallback" | "legacy_retrieve";
 	vectorResults: RetrievedFragment[];
 	textResults: RetrievedFragment[];
+	webResults: WebSearchResult[];
+	webSearch: {
+		available: boolean;
+		provider: string | null;
+		message: string | null;
+		unavailableMessage: string | null;
+	};
 	mergedResults: RetrievedFragment[];
 	selectedResults: RetrievedFragment[];
 }> {
 	return requestJson("/api/search", {
+		method: "POST",
+		body: params,
+	});
+}
+
+export async function agenticSearch(params: {
+	query: string;
+	topK?: number;
+	category?: string;
+}): Promise<AgenticSearchResult> {
+	return requestJson("/api/agentic-search", {
 		method: "POST",
 		body: params,
 	});

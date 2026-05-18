@@ -23,5 +23,6 @@ export type RetrievedFragment = {
 	vectorScore?: number;
 	textScore?: number;
 	trigramScore?: number;
+	sourceHitCount?: number;
 	combinedScore: number;
 };
