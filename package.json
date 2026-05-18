@@ -39,8 +39,11 @@
     "wiki:index:fts": "bun run src/cli/wiki-index.ts --phase=fts",
     "wiki:index:embed": "bun run src/cli/wiki-index.ts --phase=embed",
     "wiki:index:all": "bun run src/cli/wiki-index.ts --phase=all",
+    "wiki:blob:pull": "bun run src/cli/wiki-blob-sync.ts --direction=pull",
+    "wiki:blob:push": "bun run src/cli/wiki-blob-sync.ts --direction=push",
     "agentic:smoke": "bun run src/cli/agentic-search-smoke.ts",
     "auth:create-admin": "bun run src/cli/auth-create-admin.ts",
+    "db:seed:users": "bun run src/cli/seed-users.ts",
     "wiki:register:missing-slugs": "bun run src/cli/wiki-register-missing-slugs.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "bun run src/cli/migrate.ts",
@@ -48,6 +51,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "actionlint": "actionlint",
     "typecheck": "tsc --noEmit",
     "lint": "biome lint src web",
     "format": "biome format --write src web",
@@ -56,6 +60,7 @@
     "build:web": "vite build",
     "build": "tsup && vite build",
     "verify": "bun run typecheck && bun run lint && bun run format:check && bun run test && bun run build",
+    "verify:ci": "bun run actionlint && bun run verify",
     "prepublishOnly": "npm run build:server"
   },
   "files": [
@@ -68,6 +73,7 @@
     "node": ">=18"
   },
   "dependencies": {
+    "@azure/storage-blob": "^12.31.0",
     "@hono/node-server": "^2.0.2",
     "@hono/zod-validator": "^0.8.0",
     "@tanstack/react-query": "^5.100.10",
@@ -76,6 +82,8 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.45.1",
+    "gray-matter": "^4.0.3",
+    "hono": "^4.12.19",
     "jose": "^6.2.3",
     "jsdom": "^26.0.0",
     "lucide-react": "^1.16.0",
@@ -102,7 +110,6 @@
     "@vitejs/plugin-react": "^6.0.2",
     "@vitest/coverage-v8": "^4.0.18",
     "drizzle-kit": "^0.31.10",
-    "hono": "^4.11.9",
     "tailwindcss": "^4.3.0",
     "terser": "^5.46.0",
     "tsup": "^8.5.1",

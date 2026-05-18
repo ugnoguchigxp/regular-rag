@@ -12,6 +12,7 @@ import {
 	ensureContentRoot,
 	ensureGitRepo,
 } from "../modules/sources/wiki/content-repo";
+import { createWikiBlobSyncer } from "../modules/sources/wiki/blob-sync";
 import { createAzureOpenAiProviderFromAppEnv } from "../providers/azureOpenAiProviderFactory";
 import type { EmbeddingProvider } from "../providers/types";
 
@@ -375,6 +376,9 @@ async function main() {
 		logProgress("db connect start");
 		await connectDb(dbConnection.pgClient);
 		logProgress("db connect done");
+		logProgress("wiki blob pull start");
+		await createWikiBlobSyncer(env)?.pull({ force: true });
+		logProgress("wiki blob pull done");
 		logProgress("content root ensure start");
 		await ensureContentRoot(env.contentRoot);
 		logProgress("content root ensure done");

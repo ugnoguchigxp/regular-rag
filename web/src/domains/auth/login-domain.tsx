@@ -39,7 +39,7 @@ export const LoginDomainSection = ({
 						</div>
 						<div>
 							<h1>regular-rag</h1>
-							<p>Admin Access</p>
+							<p>ログイン</p>
 						</div>
 					</div>
 					<div className="auth-accent-line" />
@@ -82,7 +82,7 @@ export const LoginDomainSection = ({
 						disabled={busy}
 					>
 						<Shield className="icon" />
-						<span>Sign In</span>
+						<span>ログイン</span>
 						<ArrowRight className="icon" />
 					</button>
 				</div>

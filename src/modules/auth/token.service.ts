@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { SignJWT, jwtVerify } from "jose";
@@ -23,6 +23,7 @@ export async function generateAccessToken(
 	return new SignJWT({ ...payload, type: "access" })
 		.setProtectedHeader({ alg: "HS256" })
 		.setIssuedAt()
+		.setJti(randomUUID())
 		.setExpirationTime(env.jwtAccessExpiresIn)
 		.sign(secretKey(env.jwtSecret));
 }
@@ -35,6 +36,7 @@ export async function generateRefreshToken(
 	const token = await new SignJWT({ ...payload, type: "refresh" })
 		.setProtectedHeader({ alg: "HS256" })
 		.setIssuedAt()
+		.setJti(randomUUID())
 		.setExpirationTime(env.jwtRefreshExpiresIn)
 		.sign(secretKey(env.jwtSecret));
 

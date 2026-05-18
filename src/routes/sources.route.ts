@@ -31,6 +31,7 @@ import {
 } from "../modules/sources/wiki/slug";
 import { importMarkdownDirectory } from "../modules/sources/markdown-importer.service";
 import type { SourceRepository } from "../modules/sources/source.repository";
+import type { WikiBlobSyncer } from "../modules/sources/wiki/blob-sync";
 
 const pageSlugSchema = z
 	.string()
@@ -110,6 +111,7 @@ const folderErrorStatus = (error: unknown): 400 | 404 | 409 => {
 type SourcesRouteDeps = {
 	contentRoot: string;
 	sourceRepository: SourceRepository;
+	wikiBlobSyncer?: WikiBlobSyncer | null;
 };
 
 type SourceReindexSummary = {
@@ -145,9 +147,16 @@ const searchableMetaText = (meta: Record<string, unknown>): string => {
 };
 
 export function createSourcesRoute(deps: SourcesRouteDeps) {
-	const ensureSourceRuntime = async (): Promise<void> => {
+	const ensureSourceRuntime = async (
+		options: { forceBlobPull?: boolean } = {},
+	): Promise<void> => {
+		await deps.wikiBlobSyncer?.pull({ force: options.forceBlobPull });
 		await ensureContentRoot(deps.contentRoot);
 		await ensureGitRepo(deps.contentRoot);
+	};
+
+	const publishWikiContent = async (): Promise<void> => {
+		await deps.wikiBlobSyncer?.push();
 	};
 
 	const syncSourceIndex = async (): Promise<SourceReindexSummary> => {
@@ -226,7 +235,7 @@ export function createSourcesRoute(deps: SourcesRouteDeps) {
 			return c.json({ items: hits });
 		})
 		.post("/reindex", async (c) => {
-			await ensureSourceRuntime();
+			await ensureSourceRuntime({ forceBlobPull: true });
 			const result = await importMarkdownDirectory({
 				contentRoot: deps.contentRoot,
 				sourceRepository: deps.sourceRepository,
@@ -251,6 +260,7 @@ export function createSourcesRoute(deps: SourcesRouteDeps) {
 					created.keepFilePath,
 					`docs(folder): create ${created.path}`,
 				);
+				await publishWikiContent();
 				return c.json({ ok: true, path: created.path, commit });
 			} catch (error) {
 				return c.json(
@@ -285,6 +295,7 @@ export function createSourcesRoute(deps: SourcesRouteDeps) {
 					`docs(folder): rename ${renamed.from} to ${renamed.path}`,
 				);
 				const reindexed = await syncSourceIndex();
+				await publishWikiContent();
 				return c.json({
 					ok: true,
 					from: renamed.from,
@@ -321,6 +332,7 @@ export function createSourcesRoute(deps: SourcesRouteDeps) {
 					`docs(folder): delete ${deleted.path}`,
 				);
 				const reindexed = await syncSourceIndex();
+				await publishWikiContent();
 				return c.json({
 					ok: true,
 					path: deleted.path,
@@ -416,6 +428,7 @@ export function createSourcesRoute(deps: SourcesRouteDeps) {
 				contentHash: hash,
 				metadata: sourceMetadata,
 			});
+			await publishWikiContent();
 			return c.json({ ok: true, slug: savedPage.slug, hash, commit });
 		})
 		.put("/pages/*", zValidator("json", updatePageSchema), async (c) => {
@@ -500,6 +513,7 @@ export function createSourcesRoute(deps: SourcesRouteDeps) {
 				contentHash: hash,
 				metadata: sourceMetadata,
 			});
+			await publishWikiContent();
 			return c.json({ ok: true, slug: savedPage.slug, hash, commit });
 		})
 		.delete("/pages/*", async (c) => {
@@ -522,6 +536,7 @@ export function createSourcesRoute(deps: SourcesRouteDeps) {
 				await deps.sourceRepository.deleteSourceByUri(
 					`${deps.contentRoot}/pages/${existing.path}`,
 				);
+				await publishWikiContent();
 				return c.json({ ok: true, slug, commit });
 			} catch {
 				return c.json({ message: "Page not found", slug }, 404);

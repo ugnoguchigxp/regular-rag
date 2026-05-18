@@ -1,8 +1,13 @@
 export const APP_CONFIG_DEFAULTS = {
 	nodeEnv: "development",
+	host: "127.0.0.1",
 	port: 5173,
 	databaseUrl: "postgres://postgres:postgres@localhost:5432/regular_rag",
 	contentRoot: "./wiki-knowledge",
+	wikiStorageBackend: "local",
+	wikiBlobContainer: "wiki-knowledge",
+	wikiBlobPrefix: "",
+	wikiBlobPullIntervalMs: 30_000,
 	webSearchProviderMode: "auto",
 	exaSearchBaseUrl: "https://api.exa.ai",
 	azureOpenAiApiVersion: "2024-06-01",
@@ -12,7 +17,7 @@ export const APP_CONFIG_DEFAULTS = {
 	jwtRefreshExpiresIn: "7d",
 	appUrl: "http://localhost:5173",
 	corsOrigins: ["http://localhost:5173"],
-	trustProxy: false,
+	trustProxy: true,
 	cookieSameSite: "lax",
 	openAiApiVersion: undefined as string | undefined,
 } as const;

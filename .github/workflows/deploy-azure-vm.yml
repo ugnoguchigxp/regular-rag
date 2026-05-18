@@ -1,0 +1,176 @@
+name: Deploy to Azure VM
+
+on:
+  workflow_dispatch:
+    inputs:
+      ssh_host:
+        description: "Static public IP or DNS name for SSH. This workflow does not query Azure for the IP."
+        required: true
+        default: "13.78.45.101"
+      app_domain:
+        description: "Public domain host used by Nginx and Let's Encrypt. Do not include https://."
+        required: true
+        default: "products.dev.gxp.jp"
+      letsencrypt_email:
+        description: "Email address for Let's Encrypt notices."
+        required: true
+      run_verify:
+        description: "Run full verify before packaging."
+        required: true
+        type: boolean
+        default: true
+      start_vm:
+        description: "Start the existing VM with az before deploying."
+        required: true
+        type: boolean
+        default: true
+
+env:
+  AZURE_RESOURCE_GROUP: rg-nextjs-template-deploy
+  AZURE_VM_NAME: vm-nextjs-app
+  VM_USER: azureuser
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Setup Go for actionlint
+        if: ${{ inputs.run_verify }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Install actionlint
+        if: ${{ inputs.run_verify }}
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Verify
+        if: ${{ inputs.run_verify }}
+        run: bun run verify:ci
+
+      - name: Build
+        if: ${{ !inputs.run_verify }}
+        run: bun run build
+
+      - name: Package release
+        run: |
+          mkdir -p wiki-knowledge/pages
+          tar -czf regular-rag-release.tgz \
+            package.json \
+            bun.lock \
+            Dockerfile \
+            docker-compose.yml \
+            src \
+            drizzle \
+            dist-web \
+            seed \
+            wiki-knowledge
+
+      - name: Azure login
+        if: ${{ inputs.start_vm }}
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Start VM
+        if: ${{ inputs.start_vm }}
+        run: |
+          az vm start \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_VM_NAME"
+
+      - name: Install SSH key
+        env:
+          VM_SSH_PRIVATE_KEY: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+        run: |
+          test -n "$VM_SSH_PRIVATE_KEY"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VM_SSH_PRIVATE_KEY" > ~/.ssh/id_regular_rag
+          chmod 600 ~/.ssh/id_regular_rag
+
+      - name: Trust SSH host
+        run: |
+          for attempt in $(seq 1 30); do
+            if ssh-keyscan -H "${{ inputs.ssh_host }}" >> ~/.ssh/known_hosts 2>/dev/null; then
+              exit 0
+            fi
+            echo "Waiting for SSH host to become reachable ($attempt/30)..."
+            sleep 5
+          done
+          echo "SSH host is not reachable: ${{ inputs.ssh_host }}" >&2
+          exit 1
+
+      - name: Render runtime env
+        env:
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          APP_URL: https://${{ inputs.app_domain }}
+          CORS_ORIGINS: https://${{ inputs.app_domain }}
+          AUTH_COOKIE_SECURE: "true"
+          SECURITY_HEADERS_MODE: https
+          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          AZURE_OPENAI_DEPLOYMENT: ${{ secrets.AZURE_OPENAI_DEPLOYMENT }}
+          AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT: ${{ secrets.AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
+          BRAVE_SEARCH_API_KEY: ${{ secrets.BRAVE_SEARCH_API_KEY }}
+          WIKI_STORAGE_BACKEND: ${{ vars.WIKI_STORAGE_BACKEND }}
+          AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+          WIKI_BLOB_CONTAINER: ${{ vars.WIKI_BLOB_CONTAINER }}
+          WIKI_BLOB_PREFIX: ${{ vars.WIKI_BLOB_PREFIX }}
+        run: |
+          test -n "$JWT_SECRET"
+          {
+            printf 'NODE_ENV=production\n'
+            printf 'APP_URL=%s\n' "$APP_URL"
+            printf 'CORS_ORIGINS=%s\n' "$CORS_ORIGINS"
+            printf 'AUTH_COOKIE_SECURE=%s\n' "$AUTH_COOKIE_SECURE"
+            printf 'SECURITY_HEADERS_MODE=%s\n' "$SECURITY_HEADERS_MODE"
+            printf 'JWT_SECRET=%s\n' "$JWT_SECRET"
+            printf 'AZURE_OPENAI_ENDPOINT=%s\n' "$AZURE_OPENAI_ENDPOINT"
+            printf 'AZURE_OPENAI_API_KEY=%s\n' "$AZURE_OPENAI_API_KEY"
+            printf 'AZURE_OPENAI_DEPLOYMENT=%s\n' "${AZURE_OPENAI_DEPLOYMENT:-gpt-5-4-mini}"
+            printf 'AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT=%s\n' "${AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT:-text-embedding-3-small}"
+            printf 'OPENAI_API_KEY=%s\n' "$OPENAI_API_KEY"
+            printf 'OPENAI_BASE_URL=%s\n' "$OPENAI_BASE_URL"
+            printf 'EXA_API_KEY=%s\n' "$EXA_API_KEY"
+            printf 'BRAVE_SEARCH_API_KEY=%s\n' "$BRAVE_SEARCH_API_KEY"
+            printf 'WIKI_STORAGE_BACKEND=%s\n' "${WIKI_STORAGE_BACKEND:-local}"
+            printf 'AZURE_STORAGE_CONNECTION_STRING=%s\n' "$AZURE_STORAGE_CONNECTION_STRING"
+            printf 'WIKI_BLOB_CONTAINER=%s\n' "${WIKI_BLOB_CONTAINER:-wiki-knowledge}"
+            printf 'WIKI_BLOB_PREFIX=%s\n' "${WIKI_BLOB_PREFIX:-}"
+          } > regular-rag.env
+
+      - name: Upload release to VM
+        run: |
+          scp -i ~/.ssh/id_regular_rag \
+            regular-rag-release.tgz \
+            regular-rag.env \
+            scripts/deploy/azure-vm-provision.sh \
+            "$VM_USER@${{ inputs.ssh_host }}:/tmp/"
+
+      - name: Provision and deploy
+        env:
+          APP_DOMAIN: ${{ inputs.app_domain }}
+          LETSENCRYPT_EMAIL: ${{ inputs.letsencrypt_email }}
+        run: |
+          ssh -i ~/.ssh/id_regular_rag "$VM_USER@${{ inputs.ssh_host }}" \
+            "sudo APP_DOMAIN='$APP_DOMAIN' LETSENCRYPT_EMAIL='$LETSENCRYPT_EMAIL' bash /tmp/azure-vm-provision.sh"

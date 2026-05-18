@@ -1,0 +1,16 @@
+[
+  {
+    "email": "admin@example.com",
+    "displayName": "Admin User",
+    "role": "admin",
+    "isActive": true,
+    "passwordEnv": "SEED_ADMIN_PASSWORD"
+  },
+  {
+    "email": "member@example.com",
+    "displayName": "Member User",
+    "role": "member",
+    "isActive": true,
+    "passwordEnv": "SEED_MEMBER_PASSWORD"
+  }
+]

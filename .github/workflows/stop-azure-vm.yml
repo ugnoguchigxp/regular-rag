@@ -1,0 +1,43 @@
+name: Stop Azure VM
+
+on:
+  workflow_dispatch:
+  schedule:
+    # GitHub cron is UTC. 09:00 UTC = 18:00 JST.
+    - cron: "0 9 * * 1-5"
+
+env:
+  AZURE_RESOURCE_GROUP: rg-nextjs-template-deploy
+  AZURE_VM_NAME: vm-nextjs-app
+
+concurrency:
+  group: azure-vm-power
+  cancel-in-progress: false
+
+jobs:
+  stop:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.AZURE_VM_SCHEDULE_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deallocate VM
+        run: |
+          az vm deallocate \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_VM_NAME"
+
+      - name: Show power state
+        run: |
+          az vm get-instance-view \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_VM_NAME" \
+            --query "instanceView.statuses[?starts_with(code, 'PowerState/')].displayStatus" \
+            --output tsv

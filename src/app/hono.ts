@@ -5,6 +5,7 @@ import { csrf } from "hono/csrf";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
+import { HTTPException } from "hono/http-exception";
 import { secureHeaders } from "hono/secure-headers";
 import type { DbConnection } from "../db";
 import { createDbConnection } from "../db";
@@ -19,6 +20,10 @@ import { HttpError } from "../modules/auth/errors";
 import { SearchEvidenceCollector } from "../modules/rag/search-evidence";
 import { SettingsRepository } from "../modules/settings/settings.repository";
 import { SourceRepository } from "../modules/sources/source.repository";
+import {
+	createWikiBlobSyncer,
+	type WikiBlobSyncer,
+} from "../modules/sources/wiki/blob-sync";
 import { readPage } from "../modules/sources/wiki/content-repo";
 import { requireAdmin, requireAuth } from "../middleware/auth";
 import { rateLimiter } from "../middleware/rate-limiter";
@@ -53,6 +58,7 @@ type AppRuntime = {
 	evidenceCollector: SearchEvidenceCollector;
 	authService: AuthService;
 	settingsRepository: SettingsRepository;
+	wikiBlobSyncer: WikiBlobSyncer | null;
 	agenticSearchService: {
 		run(input: {
 			query: string;
@@ -128,6 +134,7 @@ function isRuntimeShape(value: unknown): value is AppRuntime {
 		Boolean(obj.evidenceCollector) &&
 		Boolean(obj.authService) &&
 		Boolean(obj.settingsRepository) &&
+		Object.hasOwn(obj, "wikiBlobSyncer") &&
 		typeof settingsRepo?.getSystemContextForUser === "function" &&
 		typeof settingsRepo?.updateSystemContext === "function" &&
 		Boolean(obj.agenticSearchService) &&
@@ -144,6 +151,8 @@ function isUnconfiguredAgenticService(value: unknown): boolean {
 async function createRuntime(): Promise<AppRuntime> {
 	const env = readAppEnv();
 	const dbConnection = createDbConnection(env.databaseUrl);
+	const wikiBlobSyncer = createWikiBlobSyncer(env);
+	await wikiBlobSyncer?.pull({ force: true });
 
 	let provider: LlmProvider & EmbeddingProvider;
 	try {
@@ -199,7 +208,10 @@ async function createRuntime(): Promise<AppRuntime> {
 				const toolRegistry = new AgenticToolRegistry({
 					sourceRepository,
 					createEmbedding: (input) => provider.createEmbedding(input),
-					readWikiPage: (slug) => readPage(env.contentRoot, slug),
+					readWikiPage: async (slug) => {
+						await wikiBlobSyncer?.pull();
+						return readPage(env.contentRoot, slug);
+					},
 					evidenceCollector,
 					webSearchProvider: configuredWebSearch.provider,
 					webSearchUnavailableMessage:
@@ -239,6 +251,7 @@ async function createRuntime(): Promise<AppRuntime> {
 		evidenceCollector,
 		authService,
 		settingsRepository,
+		wikiBlobSyncer,
 		agenticSearchService,
 	};
 }
@@ -282,14 +295,20 @@ const runtime = await getAppRuntime();
 const app = new Hono();
 const distWebRoot = path.resolve(process.cwd(), "dist-web");
 const distWebIndex = path.resolve(distWebRoot, "index.html");
+const useHttpsSecurityHeaders =
+	runtime.env.securityHeadersMode === "https" ||
+	(runtime.env.securityHeadersMode === "auto" && runtime.env.secureCookie);
+const secureHeaderOptions = useHttpsSecurityHeaders
+	? { contentSecurityPolicy: undefined }
+	: {
+			contentSecurityPolicy: undefined,
+			crossOriginOpenerPolicy: false,
+			originAgentCluster: false,
+			strictTransportSecurity: false,
+		};
 
 app.use("*", logger());
-app.use(
-	"*",
-	secureHeaders({
-		contentSecurityPolicy: undefined,
-	}),
-);
+app.use("*", secureHeaders(secureHeaderOptions));
 app.use(
 	"/api/*",
 	cors({
@@ -328,7 +347,7 @@ app.use(
 	}),
 );
 app.use("/api/*", csrf());
-app.onError((error, c) => {
+app.onError(async (error, c) => {
 	console.error(error);
 	const dbError = error as { code?: string; message?: string };
 	if (
@@ -347,6 +366,21 @@ app.onError((error, c) => {
 	if (error instanceof HttpError) {
 		return c.json(
 			{ message: error.message },
+			error.status as 400 | 401 | 403 | 404 | 409 | 500,
+		);
+	}
+	if (error instanceof HTTPException) {
+		const response = error.getResponse();
+		const message =
+			(await response
+				.clone()
+				.text()
+				.catch(() => "")) ||
+			error.message ||
+			response.statusText ||
+			"Request failed";
+		return c.json(
+			{ message },
 			error.status as 400 | 401 | 403 | 404 | 409 | 500,
 		);
 	}
@@ -481,6 +515,7 @@ app.route(
 	createSourcesRoute({
 		contentRoot: runtime.env.contentRoot,
 		sourceRepository: runtime.sourceRepository,
+		wikiBlobSyncer: runtime.wikiBlobSyncer,
 	}),
 );
 app.route(

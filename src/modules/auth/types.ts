@@ -8,6 +8,7 @@ export const jwtPayloadSchema = z.object({
 	email: z.string().email(),
 	role: userRoleSchema,
 	type: z.enum(["access", "refresh"]),
+	jti: z.string().optional(),
 });
 export type JwtPayload = z.infer<typeof jwtPayloadSchema>;
 

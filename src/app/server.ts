@@ -7,11 +7,12 @@ const env = readAppEnv();
 const server = serve(
 	{
 		fetch: app.fetch,
+		hostname: env.host,
 		port: env.port,
 	},
 	(info) => {
 		console.log(
-			`regular-rag server listening on http://localhost:${info.port}`,
+			`regular-rag server listening on http://${env.host}:${info.port}`,
 		);
 	},
 );

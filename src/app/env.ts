@@ -15,10 +15,50 @@ const optionalUrl = z.preprocess((value) => {
 	return trimmed.length > 0 ? trimmed : undefined;
 }, z.string().url().optional());
 
+const optionalBoolean = z.preprocess((value) => {
+	if (typeof value === "boolean") return value;
+	if (typeof value !== "string") return value;
+	const normalized = value.trim().toLowerCase();
+	if (!normalized) return undefined;
+	if (["1", "true", "yes", "on"].includes(normalized)) return true;
+	if (["0", "false", "no", "off"].includes(normalized)) return false;
+	return value;
+}, z.boolean().optional());
+
+const optionalCookieSameSite = z.preprocess((value) => {
+	if (typeof value !== "string") return value;
+	const normalized = value.trim().toLowerCase();
+	return normalized.length > 0 ? normalized : undefined;
+}, z.enum(["lax", "strict", "none"]).optional());
+
+const optionalSecurityHeadersMode = z.preprocess(
+	(value) => {
+		if (typeof value !== "string") return value;
+		const normalized = value.trim().toLowerCase();
+		return normalized.length > 0 ? normalized : undefined;
+	},
+	z.enum(["auto", "http", "https"]).default("auto"),
+);
+
+const optionalWikiStorageBackend = z.preprocess((value) => {
+	if (typeof value !== "string") return value;
+	const normalized = value.trim().toLowerCase();
+	return normalized.length > 0 ? normalized : undefined;
+}, z.enum(["local", "azure-blob"]).optional());
+
 const EnvSchema = z.object({
 	NODE_ENV: z
 		.enum(["development", "test", "production"])
 		.default(APP_CONFIG_DEFAULTS.nodeEnv),
+	APP_URL: optionalUrl,
+	CORS_ORIGINS: optionalTrimmedString,
+	AUTH_COOKIE_SECURE: optionalBoolean,
+	AUTH_COOKIE_SAME_SITE: optionalCookieSameSite,
+	SECURITY_HEADERS_MODE: optionalSecurityHeadersMode,
+	WIKI_STORAGE_BACKEND: optionalWikiStorageBackend,
+	AZURE_STORAGE_CONNECTION_STRING: optionalTrimmedString,
+	WIKI_BLOB_CONTAINER: optionalTrimmedString,
+	WIKI_BLOB_PREFIX: optionalTrimmedString,
 	EXA_API_KEY: optionalTrimmedString,
 	BRAVE_SEARCH_API_KEY: optionalTrimmedString,
 	OPENAI_API_KEY: optionalTrimmedString,
@@ -36,9 +76,15 @@ const EnvSchema = z.object({
 
 export type AppEnv = {
 	nodeEnv: "development" | "test" | "production";
+	host: string;
 	port: number;
 	databaseUrl: string;
 	contentRoot: string;
+	wikiStorageBackend: "local" | "azure-blob";
+	azureStorageConnectionString?: string;
+	wikiBlobContainer: string;
+	wikiBlobPrefix: string;
+	wikiBlobPullIntervalMs: number;
 	webSearchProviderMode: "exa" | "brave" | "auto";
 	exaApiKey?: string;
 	exaSearchBaseUrl: string;
@@ -65,6 +111,7 @@ export type AppEnv = {
 	trustProxy: boolean;
 	secureCookie: boolean;
 	cookieSameSite: "lax" | "strict" | "none";
+	securityHeadersMode: "auto" | "http" | "https";
 };
 
 function normalizeOpenAiBaseUrl(baseUrl?: string): string | undefined {
@@ -117,18 +164,37 @@ function toAzureCompatibleBaseUrl(endpoint?: string): string | undefined {
 	return `${url.origin}/openai/v1`;
 }
 
+function parseCorsOrigins(value?: string): string[] | undefined {
+	const origins = value
+		?.split(",")
+		.map((origin) => origin.trim())
+		.filter(Boolean);
+	return origins?.length ? origins : undefined;
+}
+
 export function readAppEnv(env: NodeJS.ProcessEnv = process.env): AppEnv {
 	const parsed = EnvSchema.parse(env);
-	const appUrl = APP_CONFIG_DEFAULTS.appUrl;
+	const appUrl = parsed.APP_URL ?? APP_CONFIG_DEFAULTS.appUrl;
+	const appUrlIsHttps = appUrl.toLowerCase().startsWith("https://");
 	const cookieSameSite =
-		APP_CONFIG_DEFAULTS.cookieSameSite as AppEnv["cookieSameSite"];
-	const secureCookie =
-		parsed.NODE_ENV === "production" ||
-		Boolean(appUrl?.toLowerCase().startsWith("https://"));
+		parsed.AUTH_COOKIE_SAME_SITE ??
+		(APP_CONFIG_DEFAULTS.cookieSameSite as AppEnv["cookieSameSite"]);
+	const defaultSecureCookie = parsed.APP_URL
+		? appUrlIsHttps
+		: parsed.NODE_ENV === "production" || appUrlIsHttps;
+	const secureCookie = parsed.AUTH_COOKIE_SECURE ?? defaultSecureCookie;
 	if (cookieSameSite === "none" && !secureCookie) {
 		throw new Error(
-			"cookieSameSite=none requires secure cookies. Use HTTPS appUrl or NODE_ENV=production.",
+			"AUTH_COOKIE_SAME_SITE=none requires secure cookies. Use HTTPS APP_URL or AUTH_COOKIE_SECURE=true.",
 		);
+	}
+	const configuredCorsOrigins = parseCorsOrigins(parsed.CORS_ORIGINS);
+	const corsOrigins = configuredCorsOrigins ?? [
+		...APP_CONFIG_DEFAULTS.corsOrigins,
+	];
+	const appOrigin = new URL(appUrl).origin;
+	if (!corsOrigins.includes(appOrigin)) {
+		corsOrigins.push(appOrigin);
 	}
 
 	const openAiCredentialSource = parsed.OPENAI_API_KEY
@@ -153,9 +219,19 @@ export function readAppEnv(env: NodeJS.ProcessEnv = process.env): AppEnv {
 
 	return {
 		nodeEnv: parsed.NODE_ENV,
+		host: APP_CONFIG_DEFAULTS.host,
 		port: APP_CONFIG_DEFAULTS.port,
 		databaseUrl: APP_CONFIG_DEFAULTS.databaseUrl,
 		contentRoot: path.resolve(process.cwd(), APP_CONFIG_DEFAULTS.contentRoot),
+		wikiStorageBackend:
+			parsed.WIKI_STORAGE_BACKEND ??
+			(APP_CONFIG_DEFAULTS.wikiStorageBackend as "local" | "azure-blob"),
+		azureStorageConnectionString: parsed.AZURE_STORAGE_CONNECTION_STRING,
+		wikiBlobContainer:
+			parsed.WIKI_BLOB_CONTAINER ?? APP_CONFIG_DEFAULTS.wikiBlobContainer,
+		wikiBlobPrefix:
+			parsed.WIKI_BLOB_PREFIX ?? APP_CONFIG_DEFAULTS.wikiBlobPrefix,
+		wikiBlobPullIntervalMs: APP_CONFIG_DEFAULTS.wikiBlobPullIntervalMs,
 		webSearchProviderMode: APP_CONFIG_DEFAULTS.webSearchProviderMode,
 		exaApiKey: parsed.EXA_API_KEY,
 		exaSearchBaseUrl: APP_CONFIG_DEFAULTS.exaSearchBaseUrl.replace(/\/+$/, ""),
@@ -180,9 +256,10 @@ export function readAppEnv(env: NodeJS.ProcessEnv = process.env): AppEnv {
 		jwtAccessExpiresIn: APP_CONFIG_DEFAULTS.jwtAccessExpiresIn,
 		jwtRefreshExpiresIn: APP_CONFIG_DEFAULTS.jwtRefreshExpiresIn,
 		appUrl,
-		corsOrigins: [...APP_CONFIG_DEFAULTS.corsOrigins],
+		corsOrigins,
 		trustProxy: APP_CONFIG_DEFAULTS.trustProxy,
 		secureCookie,
 		cookieSameSite,
+		securityHeadersMode: parsed.SECURITY_HEADERS_MODE,
 	};
 }

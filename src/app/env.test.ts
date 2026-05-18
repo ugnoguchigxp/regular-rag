@@ -66,13 +66,45 @@ describe("readAppEnv", () => {
 		expect(env.exaSearchBaseUrl).toBe(APP_CONFIG_DEFAULTS.exaSearchBaseUrl);
 		expect(env.braveSearchApiKey).toBe("test-brave-key");
 		expect(env.corsOrigins).toEqual(APP_CONFIG_DEFAULTS.corsOrigins);
-		expect(env.trustProxy).toBe(false);
+		expect(env.host).toBe(APP_CONFIG_DEFAULTS.host);
+		expect(env.trustProxy).toBe(APP_CONFIG_DEFAULTS.trustProxy);
 		expect(env.cookieSameSite).toBe(APP_CONFIG_DEFAULTS.cookieSameSite);
 		expect(env.jwtSecret).toBe("x".repeat(32));
 		expect(env.jwtAccessExpiresIn).toBe(APP_CONFIG_DEFAULTS.jwtAccessExpiresIn);
 		expect(env.jwtRefreshExpiresIn).toBe(
 			APP_CONFIG_DEFAULTS.jwtRefreshExpiresIn,
 		);
+	});
+
+	it("supports explicit HTTP runtime mode", () => {
+		const env = readAppEnv({
+			NODE_ENV: "production",
+			APP_URL: "http://products.dev.gxp.jp",
+			CORS_ORIGINS: "http://products.dev.gxp.jp,http://localhost:5173",
+			AUTH_COOKIE_SECURE: "false",
+			SECURITY_HEADERS_MODE: "http",
+		});
+		expect(env.appUrl).toBe("http://products.dev.gxp.jp");
+		expect(env.corsOrigins).toEqual([
+			"http://products.dev.gxp.jp",
+			"http://localhost:5173",
+		]);
+		expect(env.secureCookie).toBe(false);
+		expect(env.securityHeadersMode).toBe("http");
+	});
+
+	it("supports explicit HTTPS runtime mode", () => {
+		const env = readAppEnv({
+			APP_URL: "https://products.dev.gxp.jp",
+			AUTH_COOKIE_SECURE: "true",
+			AUTH_COOKIE_SAME_SITE: "lax",
+			SECURITY_HEADERS_MODE: "https",
+		});
+		expect(env.appUrl).toBe("https://products.dev.gxp.jp");
+		expect(env.corsOrigins).toContain("https://products.dev.gxp.jp");
+		expect(env.secureCookie).toBe(true);
+		expect(env.cookieSameSite).toBe("lax");
+		expect(env.securityHeadersMode).toBe("https");
 	});
 
 	it("uses common Azure defaults when optional model settings are omitted", () => {
@@ -87,6 +119,20 @@ describe("readAppEnv", () => {
 		expect(env.azureOpenAiApiVersion).toBe(
 			APP_CONFIG_DEFAULTS.azureOpenAiApiVersion,
 		);
+	});
+
+	it("supports Azure Blob wiki storage settings", () => {
+		const env = readAppEnv({
+			WIKI_STORAGE_BACKEND: "azure-blob",
+			AZURE_STORAGE_CONNECTION_STRING:
+				"DefaultEndpointsProtocol=https;AccountName=test;AccountKey=test;EndpointSuffix=core.windows.net",
+			WIKI_BLOB_CONTAINER: "regular-rag-wiki",
+			WIKI_BLOB_PREFIX: "poc/wiki",
+		});
+		expect(env.wikiStorageBackend).toBe("azure-blob");
+		expect(env.azureStorageConnectionString).toContain("AccountName=test");
+		expect(env.wikiBlobContainer).toBe("regular-rag-wiki");
+		expect(env.wikiBlobPrefix).toBe("poc/wiki");
 	});
 
 	it("ignores empty optional secret placeholders", () => {
