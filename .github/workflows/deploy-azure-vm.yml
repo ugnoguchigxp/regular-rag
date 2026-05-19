@@ -159,11 +159,26 @@ jobs:
             printf 'WIKI_BLOB_PREFIX=%s\n' "${WIKI_BLOB_PREFIX:-}"
           } > regular-rag.env
 
+      - name: Render provision env
+        env:
+          BASIC_AUTH_USERNAME: ${{ vars.BASIC_AUTH_USERNAME }}
+          BASIC_AUTH_PASSWORD: ${{ secrets.BASIC_AUTH_PASSWORD }}
+        run: |
+          test -n "$BASIC_AUTH_PASSWORD"
+          BASIC_AUTH_USERNAME_VALUE="${BASIC_AUTH_USERNAME:-regular-rag}"
+          {
+            printf 'ENABLE_BASIC_AUTH=true\n'
+            printf 'BASIC_AUTH_USERNAME_B64=%s\n' "$(printf '%s' "$BASIC_AUTH_USERNAME_VALUE" | base64 | tr -d '\n')"
+            printf 'BASIC_AUTH_PASSWORD_B64=%s\n' "$(printf '%s' "$BASIC_AUTH_PASSWORD" | base64 | tr -d '\n')"
+          } > regular-rag-provision.env
+          chmod 600 regular-rag-provision.env
+
       - name: Upload release to VM
         run: |
           scp -i ~/.ssh/id_regular_rag \
             regular-rag-release.tgz \
             regular-rag.env \
+            regular-rag-provision.env \
             scripts/deploy/azure-vm-provision.sh \
             "$VM_USER@${{ inputs.ssh_host }}:/tmp/"
 
@@ -173,4 +188,4 @@ jobs:
           LETSENCRYPT_EMAIL: ${{ inputs.letsencrypt_email }}
         run: |
           ssh -i ~/.ssh/id_regular_rag "$VM_USER@${{ inputs.ssh_host }}" \
-            "sudo APP_DOMAIN='$APP_DOMAIN' LETSENCRYPT_EMAIL='$LETSENCRYPT_EMAIL' bash /tmp/azure-vm-provision.sh"
+            "sudo APP_DOMAIN='$APP_DOMAIN' LETSENCRYPT_EMAIL='$LETSENCRYPT_EMAIL' PROVISION_ENV_SOURCE=/tmp/regular-rag-provision.env bash /tmp/azure-vm-provision.sh"

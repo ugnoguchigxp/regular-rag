@@ -34,6 +34,7 @@ Required:
 
 - `VM_SSH_PRIVATE_KEY`: private key for `azureuser`
 - `JWT_SECRET`: 32+ character JWT signing secret
+- `BASIC_AUTH_PASSWORD`: strong password for Nginx Basic authentication
 
 Required for deploy-time VM start and the VM start/stop workflows:
 
@@ -57,6 +58,7 @@ Optional:
 Optional GitHub repository variables:
 
 - `AZURE_VM_SCHEDULE_ENABLED`: set to `true` to enable weekday scheduled start/stop. Any other value, or an unset variable, keeps the schedule disabled.
+- `BASIC_AUTH_USERNAME`: Basic auth username. Defaults to `regular-rag`.
 - `WIKI_STORAGE_BACKEND`: `local` or `azure-blob`
 - `WIKI_BLOB_CONTAINER`: defaults to `wiki-knowledge`
 - `WIKI_BLOB_PREFIX`: optional prefix inside the container
@@ -70,6 +72,22 @@ Optional GitHub repository variables:
 - `start_vm`: starts `vm-nextjs-app` with Azure CLI before SSH.
 
 Point `products.dev.gxp.jp` to the VM public IP or Azure DNS name before running the workflow. Certbot will fail if the domain does not resolve to the VM.
+
+## Basic Authentication
+
+Nginx Basic authentication is enabled by default for the public app. The deploy workflow requires `BASIC_AUTH_PASSWORD` as a GitHub secret and uses `BASIC_AUTH_USERNAME` as an optional repository variable.
+
+The password is not written to the repository. During deployment, the VM provisioner creates `/etc/nginx/auth/regular-rag.htpasswd` with an Apache MD5 hash and stores it as `root:www-data` with `0640` permissions.
+
+Let's Encrypt HTTP-01 challenge requests are exempt from Basic authentication:
+
+```nginx
+location /.well-known/acme-challenge/ {
+    auth_basic off;
+}
+```
+
+This lets certbot issue and renew certificates without needing Basic auth credentials while keeping the application itself protected.
 
 ## VM Start / Stop Workflows
 
