@@ -260,6 +260,13 @@ bun run db:seed:users
 bun run db:seed:users -- --generate-missing-passwords
 ```
 
+検索ソース、FTS、embedding を含めた現在の DB 状態を丸ごと保存・復元する場合は、snapshot seed を使います。デフォルトでは `seed/dev-db.sql.gz` を使います。
+
+```bash
+bun run db:dump
+bun run db:seed
+```
+
 ---
 
 ## 🚀 クイックスタート (Quick Start)

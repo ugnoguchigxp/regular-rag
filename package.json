@@ -43,6 +43,8 @@
     "wiki:blob:push": "bun run src/cli/wiki-blob-sync.ts --direction=push",
     "agentic:smoke": "bun run src/cli/agentic-search-smoke.ts",
     "auth:create-admin": "bun run src/cli/auth-create-admin.ts",
+    "db:dump": "bun run src/cli/dump-db-seed.ts",
+    "db:seed": "bun run src/cli/seed-db.ts",
     "db:seed:users": "bun run src/cli/seed-users.ts",
     "wiki:register:missing-slugs": "bun run src/cli/wiki-register-missing-slugs.ts",
     "db:generate": "drizzle-kit generate",
